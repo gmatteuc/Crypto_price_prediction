@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc, f1_score, precision_recall_curve
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc, f1_score, precision_recall_curve, r2_score
 import os
 import logging
 import torch
@@ -29,101 +29,177 @@ class Evaluator:
         logger.info(f"Evaluation on Test Set (Device: {self.device}):")
         self.model.eval()
         with torch.no_grad():
-            logits = self.model(X_test)
-            probs = torch.sigmoid(logits).cpu().numpy().flatten()
+            outputs = self.model(X_test)
             
-        # Log Probability Statistics
-        logger.info(f"\n--- Prediction Probabilities Stats ---")
-        logger.info(f"Min: {probs.min():.4f}")
-        logger.info(f"Max: {probs.max():.4f}")
-        logger.info(f"Mean: {probs.mean():.4f}")
-        logger.info(f"Std: {probs.std():.4f}")
-        logger.info(f"--------------------------------------")
-        
-        self.probs = probs # Store for plotting
+        if self.config.MODEL_TYPE == 'regression':
+            preds = outputs.cpu().numpy().flatten()
             
-        # Apply Trading Logic
-        positions = []
-        current_pos = 0 # Start with Cash
-        
-        if self.config.USE_ADAPTIVE_THRESHOLD:
-            # Calculate Adaptive Thresholds
-            probs_series = pd.Series(probs)
-            rolling_mean = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
-            rolling_std = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std()
+            # Regression Metrics
+            mse = np.mean((preds - y_test) ** 2)
+            rmse = np.sqrt(mse)
+            mae = np.mean(np.abs(preds - y_test))
+            r2 = r2_score(y_test, preds)
             
-            # Handle initial NaNs or 0 std
-            rolling_std = rolling_std.fillna(0)
+            # Directional Accuracy
+            # Correct if sign(pred) == sign(actual)
+            # Note: y_test are returns, so sign matters
+            correct_direction = np.sum(np.sign(preds) == np.sign(y_test))
+            dir_acc = correct_direction / len(y_test)
             
-            self.upper_bound = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
-            self.lower_bound = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
+            logger.info(f"\n--- Regression Metrics ---")
+            logger.info(f"RMSE: {rmse:.6f}")
+            logger.info(f"MAE: {mae:.6f}")
+            logger.info(f"R2 Score: {r2:.4f}")
+            logger.info(f"Directional Accuracy: {dir_acc*100:.2f}%")
+            logger.info(f"--------------------------")
             
-            logger.info(f"Using Adaptive Threshold (Window={self.config.ADAPTIVE_WINDOW}, Std={self.config.ADAPTIVE_STD})")
+            # Trading Logic for Regression
+            positions = []
+            current_pos = 0
             
-            for i, p in enumerate(probs):
-                ub = self.upper_bound.iloc[i]
-                lb = self.lower_bound.iloc[i]
+            # We don't have probabilities for regression, so we skip probability plots
+            self.probs = preds # Hack to keep other methods working if they access self.probs
+            
+            if self.config.USE_ADAPTIVE_THRESHOLD:
+                # Calculate Adaptive Thresholds on Predicted Returns
+                preds_series = pd.Series(preds)
+                rolling_mean = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
+                rolling_std = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std()
                 
-                if p > ub:
-                    current_pos = 1 # Buy
-                elif p < lb:
-                    current_pos = 0 # Sell
-                # else: maintain current_pos
-                positions.append(current_pos)
+                # Handle initial NaNs or 0 std
+                rolling_std = rolling_std.fillna(0)
                 
+                self.upper_bound = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
+                self.lower_bound = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
+                
+                logger.info(f"Using Adaptive Threshold for Regression (Window={self.config.ADAPTIVE_WINDOW}, Std={self.config.ADAPTIVE_STD})")
+                
+                for i, p in enumerate(preds):
+                    ub = self.upper_bound.iloc[i]
+                    lb = self.lower_bound.iloc[i]
+                    
+                    if p > ub:
+                        current_pos = 1 # Buy (Predicted return significantly above recent average)
+                    elif p < lb:
+                        current_pos = 0 # Sell (Predicted return significantly below recent average)
+                    # else: maintain current_pos
+                    positions.append(current_pos)
+            else:
+                # Simple strategy: Long if pred > 0, else Cash
+                threshold = 0.0
+                self.upper_bound = np.full_like(preds, threshold)
+                self.lower_bound = np.full_like(preds, threshold) # Same for regression fixed
+                
+                logger.info(f"Using Fixed Threshold for Regression: > {threshold}")
+                
+                for p in preds:
+                    if p > threshold:
+                        current_pos = 1
+                    else:
+                        current_pos = 0
+                    positions.append(current_pos)
+                
+            predictions = np.array(positions)
+            
+            # Plot Actual vs Predicted
+            plt.figure(figsize=(12, 6))
+            plt.plot(y_test, label='Actual Returns', alpha=0.6)
+            plt.plot(preds, label='Predicted Returns', alpha=0.6)
+            plt.title(f'Actual vs Predicted Returns (R2: {r2:.4f})')
+            plt.legend()
+            visualization.save_plot(self.config.OUTPUT_DIR, 'regression_results_regression.png')
+            plt.close()
+            
+            return predictions
+            
         else:
-            # Fixed Threshold Logic
-            threshold = self.config.CONFIDENCE_THRESHOLD
-            self.upper_bound = np.full_like(probs, threshold)
-            self.lower_bound = np.full_like(probs, 1 - threshold)
+            # Classification Logic
+            probs = torch.sigmoid(outputs).cpu().numpy().flatten()
             
-            logger.info(f"Using Fixed Threshold: {threshold}")
+            # Log Probability Statistics
+            logger.info(f"\n--- Prediction Probabilities Stats ---")
+            logger.info(f"Min: {probs.min():.4f}")
+            logger.info(f"Max: {probs.max():.4f}")
+            logger.info(f"Mean: {probs.mean():.4f}")
+            logger.info(f"Std: {probs.std():.4f}")
+            logger.info(f"--------------------------------------")
             
-            for p in probs:
-                if p >= threshold:
-                    current_pos = 1 # Buy/Long
-                elif p <= (1 - threshold):
-                    current_pos = 0 # Sell/Cash
-                # else: maintain current_pos
-                positions.append(current_pos)
+            self.probs = probs # Store for plotting
+                
+            # Apply Trading Logic
+            positions = []
+            current_pos = 0 # Start with Cash
             
-        predictions = np.array(positions)
-        
-        # Standard Classification Metrics (using 0.5 for pure accuracy check)
-        # Use mean probability as threshold to show discriminative power better
-        # if the model is uncalibrated (e.g. all probs > 0.5)
-        mean_prob = np.mean(probs)
-        # If mean is very skewed, use it, otherwise stick to 0.5
-        # But for "Confusion Matrix" display, let's use 0.5 to be honest about calibration.
-        # However, the user complains it's "terrible".
-        # Let's use the optimal F1 threshold for the confusion matrix display.
-        
-        precision, recall, thresholds = precision_recall_curve(y_test, probs)
-        fscore = (2 * precision * recall) / (precision + recall + 1e-8)
-        ix = np.argmax(fscore)
-        best_thresh = thresholds[ix]
-        
-        logger.info(f"Optimal F1 Threshold: {best_thresh:.4f}")
-        
-        preds_binary = (probs > best_thresh).astype(float)
-        acc = accuracy_score(y_test, preds_binary)
-        cm = confusion_matrix(y_test, preds_binary)
-        
-        logger.info(f"\n--- Classification Metrics (Optimal Threshold {best_thresh:.4f}) ---")
-        logger.info(f"Accuracy: {acc*100:.2f}%")
-        logger.info(f"\nConfusion Matrix:\n{cm}")
-        logger.info(f"\nClassification Report:\n{classification_report(y_test, preds_binary)}")
-        
-        # Naive Benchmark
-        majority_class = 1 if np.mean(y_test) > 0.5 else 0
-        naive_preds = np.full_like(y_test, majority_class)
-        naive_acc = accuracy_score(y_test, naive_preds)
-        logger.info(f"Naive Benchmark (Majority Class): {naive_acc*100:.2f}%")
-        
-        self.plot_confusion_matrix_roc(y_test, probs, cm, accuracy=acc)
-        self.plot_rolling_metrics(y_test, preds_binary)
-        
-        return predictions
+            if self.config.USE_ADAPTIVE_THRESHOLD:
+                # Calculate Adaptive Thresholds
+                probs_series = pd.Series(probs)
+                rolling_mean = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
+                rolling_std = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std()
+                
+                # Handle initial NaNs or 0 std
+                rolling_std = rolling_std.fillna(0)
+                
+                self.upper_bound = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
+                self.lower_bound = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
+                
+                logger.info(f"Using Adaptive Threshold (Window={self.config.ADAPTIVE_WINDOW}, Std={self.config.ADAPTIVE_STD})")
+                
+                for i, p in enumerate(probs):
+                    ub = self.upper_bound.iloc[i]
+                    lb = self.lower_bound.iloc[i]
+                    
+                    if p > ub:
+                        current_pos = 1 # Buy
+                    elif p < lb:
+                        current_pos = 0 # Sell
+                    # else: maintain current_pos
+                    positions.append(current_pos)
+                    
+            else:
+                # Fixed Threshold Logic
+                threshold = self.config.CONFIDENCE_THRESHOLD
+                self.upper_bound = np.full_like(probs, threshold)
+                self.lower_bound = np.full_like(probs, 1 - threshold)
+                
+                logger.info(f"Using Fixed Threshold: {threshold}")
+                
+                for p in probs:
+                    if p >= threshold:
+                        current_pos = 1 # Buy/Long
+                    elif p <= (1 - threshold):
+                        current_pos = 0 # Sell/Cash
+                    # else: maintain current_pos
+                    positions.append(current_pos)
+                
+            predictions = np.array(positions)
+            
+            # Standard Classification Metrics
+            precision, recall, thresholds = precision_recall_curve(y_test, probs)
+            fscore = (2 * precision * recall) / (precision + recall + 1e-8)
+            ix = np.argmax(fscore)
+            best_thresh = thresholds[ix]
+            
+            logger.info(f"Optimal F1 Threshold: {best_thresh:.4f}")
+            
+            preds_binary = (probs > best_thresh).astype(float)
+            acc = accuracy_score(y_test, preds_binary)
+            cm = confusion_matrix(y_test, preds_binary)
+            
+            logger.info(f"\n--- Classification Metrics (Optimal Threshold {best_thresh:.4f}) ---")
+            logger.info(f"Accuracy: {acc*100:.2f}%")
+            logger.info(f"\nConfusion Matrix:\n{cm}")
+            logger.info(f"\nClassification Report:\n{classification_report(y_test, preds_binary)}")
+            
+            # Naive Benchmark
+            majority_class = 1 if np.mean(y_test) > 0.5 else 0
+            naive_preds = np.full_like(y_test, majority_class)
+            naive_acc = accuracy_score(y_test, naive_preds)
+            logger.info(f"Naive Benchmark (Majority Class): {naive_acc*100:.2f}%")
+            
+            self.plot_confusion_matrix_roc(y_test, probs, cm, accuracy=acc)
+            self.plot_rolling_metrics(y_test, preds_binary)
+            
+            return predictions
 
     def plot_rolling_metrics(self, y_true, preds, window=30):
         """
@@ -167,7 +243,8 @@ class Evaluator:
         plt.legend()
         plt.grid(True, alpha=0.3)
         
-        visualization.save_plot(self.config.OUTPUT_DIR, 'rolling_metrics.png')
+        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
+        visualization.save_plot(self.config.OUTPUT_DIR, f'rolling_metrics_{suffix}.png')
         plt.close()
 
     def plot_confusion_matrix_roc(self, y_true, probs, cm, accuracy=None):
@@ -201,7 +278,8 @@ class Evaluator:
         plt.title('Receiver Operating Characteristic')
         plt.legend(loc="lower right")
         
-        visualization.save_plot(self.config.OUTPUT_DIR, 'confusion_matrix_roc.png')
+        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
+        visualization.save_plot(self.config.OUTPUT_DIR, f'confusion_matrix_roc_{suffix}.png')
         plt.close()
 
     def calculate_financial_metrics(self, test_log_rets, predictions):
@@ -296,7 +374,105 @@ class Evaluator:
         
         self.plot_equity_curve(equity_bh, equity_strat, equity_random, predictions)
         
+        # Plot Strategy Comparison Bar Chart (Random Sampling)
+        self.plot_strategy_comparison_bar(asset_simple_rets, strategy_net_rets, random_net_rets)
+        
         return equity_bh, equity_strat
+
+    def plot_strategy_comparison_bar(self, asset_rets, strategy_rets, random_rets, window_days=30, num_samples=200):
+        """
+        Plots a bar chart comparing average returns over a fixed window (e.g., 1 month)
+        by sampling random starting points from the test set.
+        """
+        valid_length = len(asset_rets) - window_days
+        if valid_length <= 0:
+            logger.warning("Not enough data for strategy comparison bar chart.")
+            return
+
+        # Lists to store cumulative returns for each sample
+        bh_samples = []
+        strat_samples = []
+        rand_samples = []
+
+        # Set seed for reproducibility of the sampling
+        np.random.seed(42)
+        
+        # Generate random starting indices
+        start_indices = np.random.randint(0, valid_length, size=num_samples)
+
+        for start_idx in start_indices:
+            end_idx = start_idx + window_days
+            
+            # Calculate cumulative return for this window: (1+r1)*(1+r2)*... - 1
+            # Buy & Hold
+            bh_ret = np.prod(1 + asset_rets[start_idx:end_idx]) - 1
+            bh_samples.append(bh_ret)
+            
+            # Strategy
+            strat_ret = np.prod(1 + strategy_rets[start_idx:end_idx]) - 1
+            strat_samples.append(strat_ret)
+            
+            # Random Strategy (We can re-simulate random strategy here or use the one passed)
+            # Using the one passed is consistent with the equity curve
+            rand_ret = np.prod(1 + random_rets[start_idx:end_idx]) - 1
+            rand_samples.append(rand_ret)
+
+        # Calculate Mean and Standard Error (SEM)
+        means = [np.mean(strat_samples), np.mean(bh_samples), np.mean(rand_samples)]
+        # SEM = Std / sqrt(N)
+        sems = [np.std(strat_samples) / np.sqrt(num_samples), 
+                np.std(bh_samples) / np.sqrt(num_samples), 
+                np.std(rand_samples) / np.sqrt(num_samples)]
+                
+        labels = ['LSTM Strategy', 'Buy & Hold', 'Random Strategy']
+        colors = [self.palette[0], self.palette[1], 'gray']
+
+        # Plot
+        plt.figure(figsize=(10, 6))
+        x_pos = np.arange(len(labels))
+        
+        # Convert to percentage for display
+        means_pct = np.array(means) * 100
+        sems_pct = np.array(sems) * 100
+        
+        # Create bars with error bars (Standard Error)
+        # ecolor='gray' makes error bars gray
+        bars = plt.bar(x_pos, means_pct, yerr=sems_pct, align='center', alpha=0.7, color=colors, capsize=10, ecolor='gray')
+        
+        # Add value labels on top of bars
+        for bar, mean_val, sem_val in zip(bars, means_pct, sems_pct):
+            height = bar.get_height()
+            # Position text above positive bars and below negative bars, accounting for error bar
+            if height >= 0:
+                y_pos = height + sem_val + (abs(mean_val) * 0.05) # dynamic offset
+                va = 'bottom'
+            else:
+                y_pos = height - sem_val - (abs(mean_val) * 0.05)
+                va = 'top'
+                
+            plt.text(bar.get_x() + bar.get_width()/2., y_pos,
+                     f'{mean_val:.2f}%',
+                     ha='center', va=va, color='gray', fontweight='bold')
+
+        plt.axhline(y=0, color='black', linestyle='-', linewidth=0.8)
+        plt.xticks(x_pos, labels)
+        plt.ylabel(f'Average Return (%) over {window_days} Days')
+        plt.title(f'Strategy Performance Comparison (Avg over {window_days}-Day Windows)\nSampled {num_samples} times (Error Bars = Standard Error)')
+        
+        # Symmetrize Y-axis
+        # Find the maximum absolute extent including error bars
+        max_extent = np.max(np.abs(means_pct) + sems_pct)
+        # Add some padding (e.g. 20%)
+        limit = max_extent * 1.2
+        # Ensure limit is not zero
+        if limit == 0: limit = 1.0
+        plt.ylim(-limit, limit)
+        
+        plt.grid(axis='y', alpha=0.3)
+        
+        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
+        visualization.save_plot(self.config.OUTPUT_DIR, f'strategy_comparison_bar_{suffix}.png')
+        plt.close()
 
     def plot_equity_curve(self, equity_bh, equity_strat, equity_random, predictions):
         """
@@ -321,22 +497,47 @@ class Evaluator:
         if len(sell_indices) > 0:
             ax1.scatter(sell_indices, equity_strat[sell_indices], marker='v', color=self.palette[3], s=50, label='Sell Signal', zorder=5)
 
-        ax1.set_title('Equity Curve: Strategy vs Buy & Hold (Test Set)')
+        # Calculate total returns for title
+        ret_strat = (equity_strat[-1] - equity_strat[0]) / equity_strat[0] * 100
+        ret_bh = (equity_bh[-1] - equity_bh[0]) / equity_bh[0] * 100
+        ret_rand = (equity_random[-1] - equity_random[0]) / equity_random[0] * 100
+
+        ax1.set_title(f'Equity Curve: Strategy ({ret_strat:.1f}%) vs Buy & Hold ({ret_bh:.1f}%) vs Random ({ret_rand:.1f}%)')
         ax1.set_ylabel('Portfolio Value ($)')
         ax1.legend(loc='upper left')
         ax1.grid(True, alpha=0.3)
         
         # --- Plot 2: Probabilities & Thresholds ---
-        ax2.plot(self.probs, label='Model Probability', color='gray', alpha=0.6)
-        
-        # Plot Thresholds
-        if isinstance(self.upper_bound, pd.Series):
-            ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
-            ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
-            ax2.fill_between(range(len(self.probs)), self.lower_bound, self.upper_bound, color='gray', alpha=0.1)
+        if self.config.MODEL_TYPE == 'regression':
+            ax2.plot(self.probs, label='Predicted Return', color='gray', alpha=0.6)
+            ax2.axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Zero Line')
+            
+            # Plot Thresholds for Regression
+            if isinstance(self.upper_bound, pd.Series):
+                ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
+                ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
+                ax2.fill_between(range(len(self.probs)), self.lower_bound, self.upper_bound, color='gray', alpha=0.1)
+            else:
+                # Fixed threshold (usually 0)
+                pass 
+
+            ax2.set_ylabel('Predicted Return')
+            ax2.set_title('Predicted Returns & Adaptive Thresholds')
         else:
-            ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
-            ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
+            ax2.plot(self.probs, label='Model Probability', color='gray', alpha=0.6)
+            ax2.axhline(y=0.5, color='black', linestyle='--', alpha=0.5, label='0.5 Threshold')
+            
+            # Plot Thresholds
+            if isinstance(self.upper_bound, pd.Series):
+                ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
+                ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
+                ax2.fill_between(range(len(self.probs)), self.lower_bound, self.upper_bound, color='gray', alpha=0.1)
+            else:
+                ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
+                ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
+            
+            ax2.set_ylabel('Probability')
+            ax2.set_title('Model Confidence & Adaptive Thresholds')
 
         # Add Buy/Sell markers on Probability Plot
         if len(buy_indices) > 0:
@@ -344,19 +545,22 @@ class Evaluator:
         if len(sell_indices) > 0:
             ax2.scatter(sell_indices, self.probs[sell_indices], marker='v', color=self.palette[3], s=30, zorder=5)
 
-        ax2.set_title('Model Confidence & Adaptive Thresholds')
         ax2.set_xlabel('Days (Test Set)')
-        ax2.set_ylabel('Probability')
         
         # Dynamic Y-limits for better visibility
         p_min, p_max = self.probs.min(), self.probs.max()
         y_margin = (p_max - p_min) * 0.5 # Add 50% margin for context
         if y_margin == 0: y_margin = 0.1
-        ax2.set_ylim(max(0, p_min - y_margin), min(1, p_max + y_margin))
+        
+        if self.config.MODEL_TYPE == 'regression':
+             ax2.set_ylim(p_min - y_margin, p_max + y_margin)
+        else:
+             ax2.set_ylim(max(0, p_min - y_margin), min(1, p_max + y_margin))
         
         ax2.legend(loc='upper left')
         ax2.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        visualization.save_plot(self.config.OUTPUT_DIR, 'equity_curve.png')
+        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
+        visualization.save_plot(self.config.OUTPUT_DIR, f'equity_curve_{suffix}.png')
         plt.close()

@@ -12,10 +12,11 @@ class Config:
     TEST_SPLIT = 0.2
     
     # Model Settings
+    MODEL_TYPE = 'regression' # 'classification' or 'regression'
     INPUT_SIZE = None # Will be determined dynamically
-    HIDDEN_SIZE = 64      # Medium capacity
-    NUM_LAYERS = 1        # Single layer to prevent overfitting
-    DROPOUT = 0.2         # Low dropout
+    HIDDEN_SIZE = 128     # Increased capacity
+    NUM_LAYERS = 2        # Two layers to capture more complex patterns
+    DROPOUT = 0.1         # Reduced dropout to allow more fitting
     
     # Training Settings
     TRAIN_MODEL = True
@@ -24,6 +25,7 @@ class Config:
     LEARNING_RATE = 0.001 # Increased learning rate for GRU
     WEIGHT_DECAY = 1e-4   # Standard L2 Regularization
     PATIENCE = 20         # Increased patience
+    DIRECTIONAL_PENALTY_WEIGHT = 5.0 # Moderate penalty to encourage directional accuracy
     
     # Strategy Settings
     TRANSACTION_COST = 0.001  # 0.1% per trade (Realistic Exchange Fee)

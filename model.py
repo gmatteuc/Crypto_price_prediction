@@ -120,3 +120,27 @@ class FocalLoss(nn.Module):
             return focal_loss.sum()
         else:
             return focal_loss
+
+class CryptoLSTMRegressor(nn.Module):
+    """
+    LSTM-based regressor for cryptocurrency price return prediction.
+    """
+    def __init__(self, input_size: int, hidden_size: int = 128, num_layers: int = 3, dropout: float = 0.2):
+        super(CryptoLSTMRegressor, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
+        lstm_dropout = dropout if num_layers > 1 else 0
+        
+        self.gru = nn.GRU(input_size, hidden_size, num_layers, 
+                            batch_first=True, dropout=lstm_dropout)
+        
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_size, 1)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        out, _ = self.gru(x, h0)
+        out = self.dropout(out[:, -1, :])
+        out = self.fc(out)
+        return out

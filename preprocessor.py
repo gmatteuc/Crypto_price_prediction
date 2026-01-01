@@ -244,8 +244,13 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     # Future Close price N days from now
     future_close = df['Close'].shift(-horizon)
     
-    # Target is 1 if Future Close > Current Close
-    df_features['Target_Class'] = (future_close > df['Close']).astype(float)
+    if Config.MODEL_TYPE == 'regression':
+        # Target is the actual return: (Future Close - Current Close) / Current Close
+        # We use Log Return for better statistical properties: ln(Future / Current)
+        df_features['Target_Return'] = np.log(future_close / df['Close'])
+    else:
+        # Target is 1 if Future Close > Current Close
+        df_features['Target_Class'] = (future_close > df['Close']).astype(float)
     
     # Drop NaNs created by indicators (rolling windows) and shifting
     df_features.dropna(inplace=True)

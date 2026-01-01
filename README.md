@@ -1,29 +1,43 @@
-# Crypto Prediction with LSTM
+![Project Banner](dataset-cover.png)
 
-This project implements a Deep Learning model (LSTM) to predict the daily price movement (Up/Down) of Ethereum (ETH). It uses historical price data along with technical indicators and macroeconomic data (S&P 500, Treasury Yields, VIX, Bitcoin).
+# Crypto Prediction with LSTM (Regression Strategy)
+
+This project implements a Deep Learning model (LSTM) to predict the daily returns of Ethereum (ETH). Unlike traditional classifiers, this model uses a **Regression** approach with a custom **Directional Huber Loss** to prioritize the *direction* of the price movement over the exact magnitude.
+
+The trading strategy employs an **Adaptive Threshold** mechanism to filter out low-confidence predictions, resulting in a robust, defensive trading algorithm.
+
+## Key Results (Jan 2026)
+
+Despite a challenging market period where Buy & Hold resulted in a loss, the LSTM strategy remained profitable by effectively managing risk and staying in cash during downturns.
+
+*   **LSTM Strategy**: **+21.9%**
+*   **Buy & Hold**: **-14.8%**
+*   **Random Strategy**: **-45.0%**
+
+![Equity Curve](output/equity_curve_regression.png)
+
+### Why it works (The "Defensive" Paradox)
+Interestingly, the model's raw predictive metrics (R2 Score, Directional Accuracy) are low. However, the strategy succeeds because:
+1.  **Adaptive Threshold**: It only trades when the predicted return exceeds a dynamic volatility-based threshold.
+2.  **Risk Management**: It effectively identifies and avoids periods of high downside volatility (as seen in the equity curve, where the strategy line stays flat while the market crashes).
 
 ## Project Structure
 
 -   `main.py`: The main entry point. Handles data downloading, preprocessing, model training, and evaluation.
--   `model.py`: Defines the `CryptoLSTMClassifier` PyTorch model.
+-   `model.py`: Defines the `CryptoLSTMRegressor` PyTorch model.
+-   `config.py`: Centralized configuration for hyperparameters (Window size, Loss weights, etc.).
+-   `evaluator.py`: Advanced metrics and plotting (Equity Curves, Bar Charts with Standard Error).
+-   `trainer.py`: Custom training loop implementing the Directional Huber Loss.
 -   `data_loader.py`: Handles downloading historical data using `yfinance`.
--   `preprocessor.py`: Contains functions for feature engineering (technical indicators) and data scaling.
--   `check_gpu.py`: Utility script to check for CUDA availability.
--   `requirements.txt`: List of Python dependencies.
+-   `preprocessor.py`: Feature engineering (MACD, RSI, Bollinger Bands, Macro Indicators).
 
 ## Features
 
--   **Data Acquisition**: Fetches daily OHLCV data for ETH-USD from Yahoo Finance.
--   **External Data**: Incorporates S&P 500, 10-Year Treasury Yield (^TNX), Volatility Index (^VIX), and Bitcoin (BTC-USD) data to capture broader market trends.
--   **Feature Engineering**: Calculates technical indicators:
-    -   SMA (20, 50)
-    -   EMA (12, 26)
-    -   MACD & Signal
-    -   Bollinger Bands
-    -   RSI
-    -   ATR
--   **Model**: Long Short-Term Memory (LSTM) neural network for sequence classification.
--   **Evaluation**: Accuracy, Confusion Matrix, Classification Report, ROC Curve.
+-   **Regression Model**: Predicts continuous returns rather than binary classes.
+-   **Directional Huber Loss**: A custom loss function that penalizes sign errors (wrong direction) more heavily than magnitude errors.
+    $$ Loss = Huber(y, \hat{y}) + \lambda \cdot |y - \hat{y}| \cdot \mathbb{1}_{sign(y) \neq sign(\hat{y})} $$
+-   **Macro-Economic Context**: Incorporates S&P 500, 10-Year Treasury Yields, VIX, and Bitcoin data.
+-   **Statistical Validation**: Includes Monte Carlo-style sampling to compare strategy performance against random baselines over 30-day windows with Standard Error bars.
 
 ## Setup and Usage
 

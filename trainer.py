@@ -11,6 +11,27 @@ from model import FocalLoss
 
 logger = logging.getLogger("CryptoPrediction")
 
+class DirectionalHuberLoss(nn.Module):
+    """
+    Combines Huber Loss with a penalty for incorrect direction predictions.
+    Loss = Huber(pred, target) + lambda * ReLU(-pred * target)
+    """
+    def __init__(self, penalty_weight=1.0, delta=1.0):
+        super().__init__()
+        self.huber = nn.HuberLoss(delta=delta)
+        self.penalty_weight = penalty_weight
+
+    def forward(self, pred, target):
+        # Standard Huber Loss (Robust to outliers)
+        loss = self.huber(pred, target)
+        
+        # Directional Penalty
+        # Penalize if sign(pred) != sign(target)
+        # ReLU(-pred * target) is positive only when signs differ
+        directional_loss = torch.mean(torch.relu(-pred * target))
+        
+        return loss + (self.penalty_weight * directional_loss)
+
 class Trainer:
     """
     Handles the training and validation loop for the model.
@@ -19,11 +40,16 @@ class Trainer:
         self.model = model
         self.config = config
         self.device = device
-        # Use BCEWithLogitsLoss with pos_weight to handle class imbalance/bias
-        # pos_weight < 1 penalizes the positive class (Up) less, effectively prioritizing the negative class (Down)
-        # We set pos_weight=0.5 to make "Down" samples 2x more important than "Up" samples
-        pos_weight = torch.tensor([0.5]).to(device)
-        self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        
+        if config.MODEL_TYPE == 'regression':
+            # Use Custom Directional Huber Loss
+            penalty = getattr(config, 'DIRECTIONAL_PENALTY_WEIGHT', 1.0)
+            self.criterion = DirectionalHuberLoss(penalty_weight=penalty)
+            logger.info(f"Using DirectionalHuberLoss with penalty_weight={penalty}")
+        else:
+            # Use Focal Loss for classification to handle imbalance
+            self.criterion = FocalLoss(alpha=0.5, gamma=2.0)
+            
         self.optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=5, factor=0.5)
         self.history = {'train_loss': [], 'val_loss': [], 'val_acc': []}
@@ -35,7 +61,7 @@ class Trainer:
         train_data = TensorDataset(X_train, y_train)
         train_loader = DataLoader(train_data, batch_size=self.config.BATCH_SIZE, shuffle=True)
         
-        logger.info("Starting training...")
+        logger.info(f"Starting training ({self.config.MODEL_TYPE})...")
         
         best_val_loss = float('inf')
         counter = 0
@@ -58,10 +84,16 @@ class Trainer:
                 
                 epoch_loss += loss.item()
                 
-                # Calculate training accuracy
-                probs = torch.sigmoid(outputs)
-                predicted = (probs > 0.5).float()
-                correct_train += (predicted == batch_y.unsqueeze(1)).sum().item()
+                # Calculate training accuracy (Directional Accuracy for Regression)
+                if self.config.MODEL_TYPE == 'regression':
+                    # For regression, accuracy is: sign(pred) == sign(target)
+                    predicted = outputs
+                    correct_train += ((predicted * batch_y.unsqueeze(1)) > 0).sum().item()
+                else:
+                    probs = torch.sigmoid(outputs)
+                    predicted = (probs > 0.5).float()
+                    correct_train += (predicted == batch_y.unsqueeze(1)).sum().item()
+                
                 total_train += batch_y.size(0)
             
             avg_train_loss = epoch_loss / len(train_loader)
@@ -84,7 +116,10 @@ class Trainer:
                 best_val_loss = val_loss
                 counter = 0
                 # Save best model
-                self.model.save(self.config.MODEL_FILE)
+                if hasattr(self.model, 'save'):
+                    self.model.save(self.config.MODEL_FILE)
+                else:
+                    torch.save(self.model.state_dict(), self.config.MODEL_FILE)
             else:
                 counter += 1
                 if counter >= self.config.PATIENCE:
@@ -103,9 +138,14 @@ class Trainer:
             outputs = self.model(X)
             loss = self.criterion(outputs, y.unsqueeze(1)).item()
             
-            probs = torch.sigmoid(outputs)
-            predicted = (probs > 0.5).float()
-            correct = (predicted == y.unsqueeze(1)).sum().item()
+            if self.config.MODEL_TYPE == 'regression':
+                predicted = outputs
+                correct = ((predicted * y.unsqueeze(1)) > 0).sum().item()
+            else:
+                probs = torch.sigmoid(outputs)
+                predicted = (probs > 0.5).float()
+                correct = (predicted == y.unsqueeze(1)).sum().item()
+                
             acc = correct / len(y)
             
         return loss, acc
@@ -122,5 +162,7 @@ class Trainer:
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.legend()
-        visualization.save_plot(self.config.OUTPUT_DIR, 'training_loss.png')
+        
+        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
+        visualization.save_plot(self.config.OUTPUT_DIR, f'training_loss_{suffix}.png')
         plt.close()

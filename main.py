@@ -7,7 +7,7 @@ from config import Config
 from utils import setup_logging, set_seeds, ensure_directories
 from data_loader import download_data
 from preprocessor import add_technical_indicators, prepare_features, scale_data, create_sequences
-from model import CryptoLSTMClassifier
+from model import CryptoLSTMClassifier, CryptoLSTMRegressor
 from trainer import Trainer
 from evaluator import Evaluator
 import visualization
@@ -30,17 +30,23 @@ def main():
     logger.info("Calculating technical indicators...")
     df_processed = add_technical_indicators(df)
     
-    # Select features (removes initial NaNs and adds Target_Class)
+    # Select features (removes initial NaNs and adds Target_Class or Target_Return)
     df_features = prepare_features(df_processed)
     
-    logger.info("--- Target Class Distribution ---")
-    dist = df_features['Target_Class'].value_counts(normalize=True)
-    logger.info(f"Up (1): {dist.get(1.0, 0):.2%}")
-    logger.info(f"Down (0): {dist.get(0.0, 0):.2%}")
-    logger.info("---------------------------------")
+    if Config.MODEL_TYPE == 'regression':
+        target_col_name = 'Target_Return'
+        logger.info("--- Target Return Stats ---")
+        logger.info(df_features[target_col_name].describe())
+        logger.info("---------------------------")
+    else:
+        target_col_name = 'Target_Class'
+        logger.info("--- Target Class Distribution ---")
+        dist = df_features['Target_Class'].value_counts(normalize=True)
+        logger.info(f"Up (1): {dist.get(1.0, 0):.2%}")
+        logger.info(f"Down (0): {dist.get(0.0, 0):.2%}")
+        logger.info("---------------------------------")
     
     # Scaling
-    target_col_name = 'Target_Class'
     y_raw = df_features[target_col_name].values
     X_df = df_features.drop(columns=[target_col_name])
     
@@ -81,21 +87,35 @@ def main():
     input_size = X_train.shape[2]
     Config.INPUT_SIZE = input_size # Update config
     
-    model = CryptoLSTMClassifier(
-        input_size=input_size, 
-        hidden_size=Config.HIDDEN_SIZE, 
-        num_layers=Config.NUM_LAYERS, 
-        dropout=Config.DROPOUT
-    ).to(Config.DEVICE)
+    if Config.MODEL_TYPE == 'regression':
+        model = CryptoLSTMRegressor(
+            input_size=input_size, 
+            hidden_size=Config.HIDDEN_SIZE, 
+            num_layers=Config.NUM_LAYERS, 
+            dropout=Config.DROPOUT
+        ).to(Config.DEVICE)
+    else:
+        model = CryptoLSTMClassifier(
+            input_size=input_size, 
+            hidden_size=Config.HIDDEN_SIZE, 
+            num_layers=Config.NUM_LAYERS, 
+            dropout=Config.DROPOUT
+        ).to(Config.DEVICE)
     
     trainer = Trainer(model, Config, Config.DEVICE)
     
     if Config.TRAIN_MODEL:
         trainer.train(X_train_tensor, y_train_tensor, X_test_tensor, y_test_tensor)
         # Load best model for evaluation
-        model.load(Config.MODEL_FILE, Config.DEVICE)
+        if hasattr(model, 'load'):
+            model.load(Config.MODEL_FILE, Config.DEVICE)
+        else:
+            model.load_state_dict(torch.load(Config.MODEL_FILE, map_location=Config.DEVICE))
     else:
-        model.load(Config.MODEL_FILE, Config.DEVICE)
+        if hasattr(model, 'load'):
+            model.load(Config.MODEL_FILE, Config.DEVICE)
+        else:
+            model.load_state_dict(torch.load(Config.MODEL_FILE, map_location=Config.DEVICE))
     
     # 5. Evaluation
     evaluator = Evaluator(model, Config, Config.DEVICE)
@@ -155,14 +175,21 @@ def main():
     
     model.eval()
     with torch.no_grad():
-        prediction_logit = model(last_sequence_tensor)
-        prediction_prob = torch.sigmoid(prediction_logit).item()
-        prediction_class = 1 if prediction_prob > 0.5 else 0
+        output = model(last_sequence_tensor)
+        
+        if Config.MODEL_TYPE == 'regression':
+            predicted_return = output.item()
+            prediction_class = 1 if predicted_return > 0 else 0
+            confidence_str = f"Predicted Return: {predicted_return:.6f}"
+        else:
+            prediction_prob = torch.sigmoid(output).item()
+            prediction_class = 1 if prediction_prob > 0.5 else 0
+            confidence_str = f"Confidence (Probability of UP): {prediction_prob:.4f}"
     
     logger.info(f"Last Date in Data: {df.index[-1]}")
     horizon_str = "Day" if Config.PREDICTION_HORIZON == 1 else f"{Config.PREDICTION_HORIZON} Days"
     logger.info(f"Prediction for Next {horizon_str}: {'UP' if prediction_class == 1 else 'DOWN'}")
-    logger.info(f"Confidence (Probability of UP): {prediction_prob:.4f}")
+    logger.info(confidence_str)
     logger.info("-------------------------------")
 
 if __name__ == "__main__":
