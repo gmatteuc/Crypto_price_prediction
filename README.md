@@ -68,6 +68,7 @@ The model's raw predictive accuracy is low (near 50%), but the strategy succeeds
 ├── data_loader.py                          # Data fetching (yfinance)
 ├── evaluator.py                            # Backtesting and plotting logic
 ├── main.py                                 # Main execution entry point
+├── predict.py                              # Daily inference script
 ├── model.py                                # PyTorch LSTM definition
 ├── preprocessor.py                         # Feature engineering
 ├── trainer.py                              # Training loop with custom loss
@@ -106,6 +107,13 @@ The model's raw predictive accuracy is low (near 50%), but the strategy succeeds
    ```bash
    python main.py
    ```
+
+6.  **Daily Trading (Inference)**:
+    To get the prediction for the next day without retraining:
+    ```bash
+    python predict.py
+    ```
+    This will output the predicted return and the recommended strategy action (BUY, SELL/CASH, HOLD).
 
 ## Dependencies
 - Python 3.8+
