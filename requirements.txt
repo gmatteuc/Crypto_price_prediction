@@ -1,0 +1,9 @@
+pandas
+numpy<2.0
+yfinance
+scikit-learn
+matplotlib
+ta
+# torch  <-- Installed manually for CUDA support (see README)
+seaborn
+joblib
