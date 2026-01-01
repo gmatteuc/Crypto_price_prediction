@@ -1,79 +1,117 @@
-![Project Banner](dataset-cover.png)
+# Crypto Prediction with LSTM
 
-# Crypto Prediction with LSTM (Regression Strategy)
+<img src="misc/dataset-cover.png" width="800">
 
-This project implements a Deep Learning model (LSTM) to predict the daily returns of Ethereum (ETH). Unlike traditional classifiers, this model uses a **Regression** approach with a custom **Directional Huber Loss** to prioritize the *direction* of the price movement over the exact magnitude.
+## Project Overview
+This project implements a Deep Learning model (LSTM) to predict the daily returns of Ethereum (ETH) and execute a robust trading strategy. Unlike traditional classifiers that simply predict "Up" or "Down", this model uses a **Regression** approach with a custom **Directional Huber Loss** to prioritize the *direction* of the price movement while maintaining sensitivity to magnitude.
 
-The trading strategy employs an **Adaptive Threshold** mechanism to filter out low-confidence predictions, resulting in a robust, defensive trading algorithm.
+The core innovation is the **Adaptive Threshold** mechanism, which filters out low-confidence predictions. This results in a "defensive" trading algorithm that aims to preserve capital during market downturns while capturing significant upside trends.
 
-## Key Results (Jan 2026)
+**Financial use case scenario:**
+*Imagine an automated trading system that needs to navigate a highly volatile crypto market. The goal is not to trade every single day, but to identify high-probability opportunities and, crucially, to sit in cash when the market direction is uncertain or bearish. This tool acts as a risk-managed portfolio allocator.*
 
-Despite a challenging market period where Buy & Hold resulted in a loss, the LSTM strategy remained profitable by effectively managing risk and staying in cash during downturns.
+Created by Giulio Matteucci in 2026 as a financial data science portfolio project.
 
-*   **LSTM Strategy**: **+21.9%**
-*   **Buy & Hold**: **-14.8%**
-*   **Random Strategy**: **-45.0%**
+## Dataset
+The data is fetched dynamically using the `yfinance` API.
+- **Source**: Yahoo Finance.
+- **Asset**: Ethereum (ETH-USD).
+- **Period**: Daily data from 2018 to present.
+- **Target Variable**: Next day's return.
+- **Key Features**:
+  - **Market Data**: Open, High, Low, Close, Volume.
+  - **Macro Indicators**: S&P 500 (`^GSPC`), 10-Year Treasury Yield (`^TNX`), Volatility Index (`^VIX`), Bitcoin (`BTC-USD`).
+  - **Technical Indicators**:
+    - Trend: MACD, EMA (12, 26), SMA (20, 50).
+    - Volatility: Bollinger Bands, ATR.
+    - Momentum: RSI.
 
-![Equity Curve](output/equity_curve_regression.png)
+## Methodology
 
-### Why it works (The "Defensive" Paradox)
-Interestingly, the model's raw predictive metrics (R2 Score, Directional Accuracy) are low. However, the strategy succeeds because:
-1.  **Adaptive Threshold**: It only trades when the predicted return exceeds a dynamic volatility-based threshold.
-2.  **Risk Management**: It effectively identifies and avoids periods of high downside volatility (as seen in the equity curve, where the strategy line stays flat while the market crashes).
+### 1. Data Engineering & Preprocessing
+- **Feature Engineering**: Calculation of technical indicators and integration of macro-economic data to provide market context.
+- **Scaling**: Robust scaling to handle outliers common in crypto data.
+- **Sequence Generation**: Creation of rolling time-window sequences (30 days) for LSTM input.
 
-## Project Structure
+### 2. Model Architecture
+- **Model**: A 2-layer Long Short-Term Memory (LSTM) network with 128 hidden units and Dropout (0.1) to prevent overfitting.
+- **Loss Function**: A custom **Directional Huber Loss**.
+  $$ Loss = Huber(y, \hat{y}) + \lambda \cdot |y - \hat{y}| \cdot \mathbb{1}_{sign(y) \neq sign(\hat{y})} $$
+  This penalizes "sign errors" (predicting Up when market goes Down) significantly more than simple magnitude errors.
 
--   `main.py`: The main entry point. Handles data downloading, preprocessing, model training, and evaluation.
--   `model.py`: Defines the `CryptoLSTMRegressor` PyTorch model.
--   `config.py`: Centralized configuration for hyperparameters (Window size, Loss weights, etc.).
--   `evaluator.py`: Advanced metrics and plotting (Equity Curves, Bar Charts with Standard Error).
--   `trainer.py`: Custom training loop implementing the Directional Huber Loss.
--   `data_loader.py`: Handles downloading historical data using `yfinance`.
--   `preprocessor.py`: Feature engineering (MACD, RSI, Bollinger Bands, Macro Indicators).
+### 3. Trading Strategy
+- **Adaptive Threshold**: The model calculates a rolling standard deviation of its own predicted returns. It only executes a trade if the predicted return magnitude exceeds `1.5 * Rolling_Std_Dev`.
+- **Risk Management**: If the signal is weak, the strategy stays in Cash (0 return), effectively avoiding "chop" and bear markets.
 
-## Features
+### 4. Validation
+- **Backtesting**: Simulation of the strategy on an unseen Test Set (approx. last 1.5 years).
+- **Monte Carlo Sampling**: Comparison of strategy returns against 200 random samples of Buy & Hold and Random Trading over 30-day windows to ensure statistical significance.
 
--   **Regression Model**: Predicts continuous returns rather than binary classes.
--   **Directional Huber Loss**: A custom loss function that penalizes sign errors (wrong direction) more heavily than magnitude errors.
-    $$ Loss = Huber(y, \hat{y}) + \lambda \cdot |y - \hat{y}| \cdot \mathbb{1}_{sign(y) \neq sign(\hat{y})} $$
--   **Macro-Economic Context**: Incorporates S&P 500, 10-Year Treasury Yields, VIX, and Bitcoin data.
--   **Statistical Validation**: Includes Monte Carlo-style sampling to compare strategy performance against random baselines over 30-day windows with Standard Error bars.
+## Key Findings (Jan 2026)
+Despite a challenging market period where the underlying asset (ETH) lost value, the strategy remained profitable.
 
-## Setup and Usage
+- **LSTM Strategy**: **+21.9%**
+- **Buy & Hold**: **-14.8%**
+- **Random Strategy**: **-45.0%**
 
-1.  **Create Environment (Conda)**:
-    It is highly recommended to use Conda to manage the environment and Python version.
-    ```bash
-    conda create -n crypto_prediction python=3.10 -y
-    conda activate crypto_prediction
-    ```
+![Equity Curve](misc/equity_curve_regression_example.png)
 
-2.  **Install PyTorch with CUDA Support (CRITICAL STEP)**:
-    To use your NVIDIA GPU, you **MUST** install the CUDA-enabled version of PyTorch using the following command. Do not rely on the default `pip install torch`.
-    ```bash
-    pip install torch --index-url https://download.pytorch.org/whl/cu121
-    ```
-    *(Note: If you do not have a GPU, you can skip this step and let `requirements.txt` install the CPU version, or run `pip install torch`)*
+**The "Defensive" Paradox**:
+The model's raw predictive accuracy is low (near 50%), but the strategy succeeds because it effectively identifies **when NOT to trade**. As seen in the equity curve, the strategy line (purple) stays flat during the major market crash (orange line drop), preserving gains.
 
-3.  **Install Other Dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
+## 💻 Project Structure
+```
+├── misc/                                   # Images and assets
+├── output/                                 # Generated plots and logs
+├── check_gpu.py                            # Utility to verify CUDA
+├── config.py                               # Hyperparameters and settings
+├── data_loader.py                          # Data fetching (yfinance)
+├── evaluator.py                            # Backtesting and plotting logic
+├── main.py                                 # Main execution entry point
+├── model.py                                # PyTorch LSTM definition
+├── preprocessor.py                         # Feature engineering
+├── trainer.py                              # Training loop with custom loss
+├── utils.py                                # Logging and seeding utilities
+├── requirements.txt                        # Python dependencies
+└── README.md                               # Project documentation
+```
 
-4.  **Run the Code**:
-    ```bash
-    python main.py
-    ```
+## ⚙️ Installation & Usage
+
+1. **Clone the repository**:
+   ```bash
+   git clone <repository-url>
+   cd Crypto_prediction
+   ```
+
+2. **Set up the environment**:
+   It is recommended to use Conda.
+   ```bash
+   conda create -n crypto_prediction python=3.10 -y
+   conda activate crypto_prediction
+   ```
+
+3. **Install PyTorch with CUDA**:
+   **Critical**: Install the version matching your CUDA driver.
+   ```bash
+   pip install torch --index-url https://download.pytorch.org/whl/cu121
+   ```
+
+4. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+5. **Run the Analysis**:
+   ```bash
+   python main.py
+   ```
 
 ## Dependencies
-
--   Python 3.8+
--   torch
--   pandas
--   numpy
--   yfinance
--   scikit-learn
--   matplotlib
--   seaborn
--   ta
--   joblib
+- Python 3.8+
+- PyTorch (CUDA recommended)
+- pandas, numpy
+- yfinance
+- scikit-learn
+- matplotlib, seaborn
+- ta (Technical Analysis library)

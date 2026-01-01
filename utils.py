@@ -17,6 +17,11 @@ def setup_logging(log_file: str = "app.log") -> logging.Logger:
     """
     # Create logger
     logger = logging.getLogger("CryptoPrediction")
+    
+    # Check if handlers already exist to avoid duplication
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
     logger.setLevel(logging.INFO)
     
     # Create handlers

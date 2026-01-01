@@ -21,3 +21,4 @@ output/
 *.pth
 *.keras
 *.pkl
+paper_trading_journal.xlsx

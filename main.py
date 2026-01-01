@@ -110,12 +110,12 @@ def main():
         if hasattr(model, 'load'):
             model.load(Config.MODEL_FILE, Config.DEVICE)
         else:
-            model.load_state_dict(torch.load(Config.MODEL_FILE, map_location=Config.DEVICE))
+            model.load_state_dict(torch.load(Config.MODEL_FILE, map_location=Config.DEVICE, weights_only=True))
     else:
         if hasattr(model, 'load'):
             model.load(Config.MODEL_FILE, Config.DEVICE)
         else:
-            model.load_state_dict(torch.load(Config.MODEL_FILE, map_location=Config.DEVICE))
+            model.load_state_dict(torch.load(Config.MODEL_FILE, map_location=Config.DEVICE, weights_only=True))
     
     # 5. Evaluation
     evaluator = Evaluator(model, Config, Config.DEVICE)
@@ -181,6 +181,57 @@ def main():
             predicted_return = output.item()
             prediction_class = 1 if predicted_return > 0 else 0
             confidence_str = f"Predicted Return: {predicted_return:.6f}"
+            
+            # --- Adaptive Threshold Logic for Tomorrow ---
+            if Config.USE_ADAPTIVE_THRESHOLD:
+                # 1. Get recent predictions from Test Set to calculate rolling stats
+                # We need the last ADAPTIVE_WINDOW predictions
+                window_size = Config.ADAPTIVE_WINDOW
+                
+                # Take the last 'window_size' inputs from X_test
+                # Note: X_test_tensor might be on GPU
+                recent_inputs = X_test_tensor[-window_size:]
+                
+                # Get predictions for these inputs
+                recent_outputs = model(recent_inputs)
+                recent_preds = recent_outputs.cpu().numpy().flatten()
+                
+                # 2. Calculate Rolling Stats (Mean and Std)
+                # We include the NEW prediction in the window calculation or just use the past?
+                # Evaluator uses rolling window of the PAST.
+                # So we use the stats of the recent_preds to judge the NEW prediction.
+                
+                rolling_mean = np.mean(recent_preds)
+                rolling_std = np.std(recent_preds)
+                
+                # 3. Calculate Thresholds
+                upper_bound = rolling_mean + (Config.ADAPTIVE_STD * rolling_std)
+                lower_bound = rolling_mean - (Config.ADAPTIVE_STD * rolling_std)
+                
+                # 4. Determine Position
+                # We need the CURRENT position (held from yesterday) to handle the "hold" logic
+                # predictions[-1] is the position for the last day in test set
+                current_position = predictions[-1] if len(predictions) > 0 else 0
+                
+                new_position = current_position # Default to hold
+                
+                # ANSI Colors for Terminal Output
+                GREEN = "\033[92m"
+                RED = "\033[91m"
+                YELLOW = "\033[93m"
+                RESET = "\033[0m"
+                
+                action_str = f"{YELLOW}HOLD{RESET}"
+                if predicted_return > upper_bound:
+                    new_position = 1
+                    action_str = f"{GREEN}BUY{RESET}"
+                elif predicted_return < lower_bound:
+                    new_position = 0
+                    action_str = f"{RED}SELL / CASH{RESET}"
+                
+                confidence_str += f"\nAdaptive Thresholds: LB {lower_bound:.6f} | UB {upper_bound:.6f}"
+                confidence_str += f"\nStrategy Action:   {action_str} (Position: {new_position})"
+                
         else:
             prediction_prob = torch.sigmoid(output).item()
             prediction_class = 1 if prediction_prob > 0.5 else 0
