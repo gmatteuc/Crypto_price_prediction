@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Training Loop
+=================================
+
+This module manages the model training process, including the training loop,
+validation, early stopping, and checkpoint saving.
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim

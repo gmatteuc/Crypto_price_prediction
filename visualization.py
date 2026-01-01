@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Visualization Module
+========================================
+
+This module contains functions for generating plots and charts to visualize
+training progress, model predictions, and strategy performance.
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns

@@ -36,7 +36,9 @@ The data is fetched dynamically using the `yfinance` API.
 ### 2. Model Architecture
 - **Model**: A 2-layer Long Short-Term Memory (LSTM) network with 128 hidden units and Dropout (0.1) to prevent overfitting.
 - **Loss Function**: A custom **Directional Huber Loss**.
-  $$ Loss = Huber(y, \hat{y}) + \lambda \cdot |y - \hat{y}| \cdot \mathbb{1}_{sign(y) \neq sign(\hat{y})} $$
+  
+  $Loss = Huber(y, \hat{y}) + \lambda \cdot |y - \hat{y}| \cdot \mathbb{1}_{sign(y) \neq sign(\hat{y})}$
+
   This penalizes "sign errors" (predicting Up when market goes Down) significantly more than simple magnitude errors.
 
 ### 3. Trading Strategy

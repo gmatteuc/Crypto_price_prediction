@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Data Loading Module
+=======================================
+
+This module handles the fetching of historical market data from Yahoo Finance
+and the integration of Fear & Greed Index data.
+"""
+
 import yfinance as yf
 import pandas as pd
 import logging

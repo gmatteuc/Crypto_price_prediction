@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Configuration Module
+========================================
+
+This module defines global configuration parameters, hyperparameters,
+file paths, and feature lists used throughout the project.
+"""
+
 import torch
 
 class Config:

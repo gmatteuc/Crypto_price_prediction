@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Main Execution Pipeline
+===========================================
+
+This is the entry point of the application. It orchestrates the entire workflow:
+data loading, preprocessing, model training, evaluation, and visualization.
+"""
+
 import numpy as np
 import joblib
 import os

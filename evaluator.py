@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Evaluation Module
+=====================================
+
+This module contains functions for evaluating model performance, backtesting
+trading strategies, and calculating financial metrics (Sharpe, Sortino, etc.).
+"""
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt

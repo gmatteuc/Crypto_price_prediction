@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Utility Functions
+=====================================
+
+This module provides helper functions for logging setup, random seed seeding,
+and other common tasks shared across the project.
+"""
+
 import random
 import numpy as np
 import torch

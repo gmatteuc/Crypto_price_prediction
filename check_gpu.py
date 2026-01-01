@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - GPU Check Utility
+=====================================
+
+This script verifies the availability of CUDA-enabled GPUs and checks
+the PyTorch installation status for hardware acceleration.
+"""
+
 import torch
 import sys
 

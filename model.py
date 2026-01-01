@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Model Architecture
+======================================
+
+This module defines the Deep Learning architecture (LSTM) and custom loss functions
+(Directional Huber Loss) used for price direction prediction.
+"""
+
 import torch
 import torch.nn as nn
 import os

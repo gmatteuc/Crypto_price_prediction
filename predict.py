@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Inference Script
+====================================
+
+This script is designed for daily usage. It loads the trained model and latest data
+to generate a trading signal (BUY/SELL/HOLD) for the next market day.
+"""
+
 import logging
 import sys
 import os

@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Data Preprocessing
+======================================
+
+This module handles feature engineering, technical indicator calculation,
+data scaling, and sequence generation for LSTM input.
+"""
+
 import pandas as pd
 import numpy as np
 from ta.trend import SMAIndicator, EMAIndicator, MACD

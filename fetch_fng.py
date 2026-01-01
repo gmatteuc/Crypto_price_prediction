@@ -1,3 +1,11 @@
+"""
+Crypto Prediction - Fear & Greed Fetcher
+========================================
+
+This script retrieves historical Fear & Greed Index data from the alternative.me API
+and saves it to a CSV file for use as a sentiment feature.
+"""
+
 import requests
 import pandas as pd
 from datetime import datetime
