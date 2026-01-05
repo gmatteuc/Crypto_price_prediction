@@ -68,7 +68,7 @@ def download_data(ticker: str, start_date: Optional[str] = None, end_date: Optio
     df = df[cols_to_keep]
     
     # --- Add Macroeconomic and Market Data ---
-    logger.info("Downloading S&P 500, NASDAQ, Treasury Yield, VIX, Bitcoin, Gold, Oil, and DXY data...")
+    logger.info("Downloading S&P 500, NASDAQ, Treasury Yield, VIX, Bitcoin, Gold, Oil, DXY, Coinbase, NVIDIA, and EURUSD data...")
     
     # Helper function to fetch and normalize auxiliary data
     def fetch_aux_data(aux_ticker: str, name: str) -> pd.Series:
@@ -95,24 +95,19 @@ def download_data(ticker: str, start_date: Optional[str] = None, end_date: Optio
     gold = fetch_aux_data("GC=F", 'Gold')
     oil = fetch_aux_data("CL=F", 'Oil')
     dxy = fetch_aux_data("DX-Y.NYB", 'DXY')
+    coin = fetch_aux_data("COIN", 'COIN')
+    nvda = fetch_aux_data("NVDA", 'NVDA')
+    eurusd = fetch_aux_data("EURUSD=X", 'EURUSD')
     
     # Fetch Fear & Greed Index
     fng = fetch_fear_and_greed_index()
     
-    # Normalize main dataframe index
+    # Merge all data
+    # Ensure main df index is normalized and tz-naive
     df.index = df.index.normalize().tz_localize(None)
     
-    # Merge data
-    # Use left join to keep the main ticker index (Crypto/Stock)
-    df = df.join(sp500, how='left')
-    df = df.join(nasdaq, how='left')
-    df = df.join(tnx, how='left')
-    df = df.join(vix, how='left')
-    df = df.join(btc, how='left')
-    df = df.join(gold, how='left')
-    df = df.join(oil, how='left')
-    df = df.join(dxy, how='left')
-    df = df.join(fng, how='left')
+    # Join all auxiliary data
+    df = df.join([sp500, nasdaq, tnx, vix, btc, gold, oil, dxy, coin, nvda, eurusd, fng], how='left')
     
     # Fill any gaps (forward fill then backward fill)
     df = df.ffill().bfill()

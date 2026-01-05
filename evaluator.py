@@ -385,7 +385,117 @@ class Evaluator:
         # Plot Strategy Comparison Bar Chart (Random Sampling)
         self.plot_strategy_comparison_bar(asset_simple_rets, strategy_net_rets, random_net_rets)
         
+        # Perform Robust Bootstrap Analysis
+        # Increased block_size to 60 to preserve longer-term market regimes (volatility clustering)
+        self.perform_bootstrap_analysis(strategy_net_rets, asset_simple_rets, block_size=60)
+        
         return equity_bh, equity_strat
+
+    def perform_bootstrap_analysis(self, strategy_rets, benchmark_rets, num_samples=1000, block_size=60):
+        """
+        Performs a Block Bootstrap analysis to test the statistical significance of the strategy's performance.
+        Generates synthetic equity curves by resampling blocks of returns.
+        """
+        logger.info(f"\n--- Robust Bootstrap Analysis ({num_samples} samples, block_size={block_size}) ---")
+        
+        n = len(strategy_rets)
+        # Ensure we can form full blocks
+        if n < block_size:
+            logger.warning("Not enough data for block bootstrap.")
+            return
+
+        strat_sharpes = []
+        bench_sharpes = []
+        strat_total_rets = []
+        bench_total_rets = []
+        
+        np.random.seed(42)
+        
+        # Pre-calculate available block start indices
+        # We use circular block bootstrap or just simple overlapping blocks
+        # Simple overlapping blocks:
+        possible_starts = np.arange(n - block_size + 1)
+        
+        for _ in range(num_samples):
+            # Generate a random sequence of blocks to fill length n
+            # We need ceil(n / block_size) blocks
+            num_blocks_needed = int(np.ceil(n / block_size))
+            
+            chosen_starts = np.random.choice(possible_starts, size=num_blocks_needed, replace=True)
+            
+            # Construct the synthetic return series
+            synth_strat_rets = []
+            synth_bench_rets = []
+            
+            for start in chosen_starts:
+                end = start + block_size
+                synth_strat_rets.extend(strategy_rets[start:end])
+                synth_bench_rets.extend(benchmark_rets[start:end])
+            
+            # Trim to original length
+            synth_strat_rets = np.array(synth_strat_rets[:n])
+            synth_bench_rets = np.array(synth_bench_rets[:n])
+            
+            # Calculate Metrics for this sample
+            # Sharpe
+            s_mean = np.mean(synth_strat_rets)
+            s_std = np.std(synth_strat_rets)
+            s_sharpe = (s_mean / s_std) * np.sqrt(252) if s_std > 0 else 0
+            strat_sharpes.append(s_sharpe)
+            
+            b_mean = np.mean(synth_bench_rets)
+            b_std = np.std(synth_bench_rets)
+            b_sharpe = (b_mean / b_std) * np.sqrt(252) if b_std > 0 else 0
+            bench_sharpes.append(b_sharpe)
+            
+            # Total Return
+            s_total = np.prod(1 + synth_strat_rets) - 1
+            strat_total_rets.append(s_total)
+            
+            b_total = np.prod(1 + synth_bench_rets) - 1
+            bench_total_rets.append(b_total)
+            
+        # Convert to arrays
+        strat_sharpes = np.array(strat_sharpes)
+        bench_sharpes = np.array(bench_sharpes)
+        strat_total_rets = np.array(strat_total_rets)
+        bench_total_rets = np.array(bench_total_rets)
+        
+        # Calculate Statistics
+        sharpe_diff = strat_sharpes - bench_sharpes
+        win_rate = np.mean(sharpe_diff > 0)
+        
+        logger.info(f"Bootstrap Win Rate (Strategy Sharpe > Benchmark Sharpe): {win_rate*100:.2f}%")
+        logger.info(f"Mean Strategy Sharpe: {np.mean(strat_sharpes):.2f} (95% CI: {np.percentile(strat_sharpes, 2.5):.2f}, {np.percentile(strat_sharpes, 97.5):.2f})")
+        logger.info(f"Mean Benchmark Sharpe: {np.mean(bench_sharpes):.2f}")
+        
+        # Plot Distributions
+        plt.figure(figsize=(12, 6))
+        
+        # Plot 1: Sharpe Ratio Distribution
+        plt.subplot(1, 2, 1)
+        sns.histplot(strat_sharpes, color=self.palette[0], label='Strategy', kde=True, alpha=0.5)
+        sns.histplot(bench_sharpes, color=self.palette[1], label='Buy & Hold', kde=True, alpha=0.5)
+        plt.axvline(np.mean(strat_sharpes), color=self.palette[0], linestyle='--')
+        plt.axvline(np.mean(bench_sharpes), color=self.palette[1], linestyle='--')
+        plt.title(f'Bootstrap Sharpe Ratio Distribution\n(Win Rate: {win_rate*100:.1f}%)')
+        plt.xlabel('Sharpe Ratio')
+        plt.legend()
+        
+        # Plot 2: Total Return Distribution
+        plt.subplot(1, 2, 2)
+        sns.histplot(strat_total_rets * 100, color=self.palette[0], label='Strategy', kde=True, alpha=0.5)
+        sns.histplot(bench_total_rets * 100, color=self.palette[1], label='Buy & Hold', kde=True, alpha=0.5)
+        plt.axvline(np.mean(strat_total_rets)*100, color=self.palette[0], linestyle='--')
+        plt.axvline(np.mean(bench_total_rets)*100, color=self.palette[1], linestyle='--')
+        plt.title('Bootstrap Total Return Distribution')
+        plt.xlabel('Total Return (%)')
+        plt.legend()
+        
+        plt.tight_layout()
+        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
+        visualization.save_plot(self.config.OUTPUT_DIR, f'bootstrap_analysis_{suffix}.png')
+        plt.close()
 
     def plot_strategy_comparison_bar(self, asset_rets, strategy_rets, random_rets, window_days=30, num_samples=200):
         """
@@ -572,3 +682,231 @@ class Evaluator:
         suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
         visualization.save_plot(self.config.OUTPUT_DIR, f'equity_curve_{suffix}.png')
         plt.close()
+
+    def perform_event_study(self, returns: np.ndarray, predictions: np.ndarray, window_back: int = 3, window_fwd: int = 5):
+        """
+        Performs an Event Study Analysis to verify if model predictions lead to actual price moves.
+        Plots the average cumulative return path for 'Up' predictions vs 'Down' predictions.
+        
+        Args:
+            returns (np.ndarray): Actual log returns.
+            predictions (np.ndarray): Predicted returns (or probabilities).
+            window_back (int): Days to look back before signal.
+            window_fwd (int): Days to look forward after signal.
+        """
+        logger.info(f"\n--- Event Study Analysis (Back={window_back}, Fwd={window_fwd}) ---")
+        
+        # Identify Events
+        # For regression: Up = Pred > 0 (or Threshold), Down = Pred < 0
+        # For classification: Up = Prob > 0.5, Down = Prob < 0.5
+        
+        up_events = []
+        down_events = []
+        
+        # We need enough data before and after
+        start_idx = window_back
+        end_idx = len(returns) - window_fwd
+        
+        if start_idx >= end_idx:
+            logger.warning("Not enough data for Event Study.")
+            return
+
+        # Determine Thresholds (Use Adaptive if available, else 0)
+        # For simplicity in this specific analysis, we use the raw sign of the prediction
+        # to test the fundamental "directionality" of the model, independent of the threshold strategy.
+        # This answers: "When the model thinks it's going up, does it go up?"
+        
+        for i in range(start_idx, end_idx):
+            pred = predictions[i]
+            
+            # Extract window of ACTUAL returns
+            # returns[i] is the return at t+1 (tomorrow).
+            # We want the path centered at signal time t.
+            # Signal at t predicts returns[i].
+            # So t=0 in the plot corresponds to the return realized at t+1?
+            # Standard Event Study: t=0 is the event day.
+            # Here event is "Prediction Made".
+            # Path:
+            # t-2: returns[i-2]
+            # t-1: returns[i-1]
+            # t+1: returns[i]   (The return we are predicting)
+            # t+2: returns[i+1]
+            
+            # Slice: from i - window_back to i + window_fwd
+            # Length: window_back + window_fwd
+            
+            # Note: returns array is already aligned such that returns[i] is the target for predictions[i]
+            # So predictions[i] says "returns[i] will be X".
+            
+            window_returns = returns[i - window_back : i + window_fwd]
+            
+            # Calculate Cumulative Return Path relative to t=0 (Signal Time)
+            # We want the price at "Signal Time" to be 0%.
+            # The return at 'i' is the return occurring AFTER the signal.
+            # So the cumulative sum should start adding from index 'window_back'.
+            
+            cum_path = np.cumsum(window_returns)
+            # Normalize so that the value BEFORE the predicted return (t=0) is 0.
+            # The predicted return is at index `window_back`.
+            # So we subtract the cumulative sum up to `window_back - 1`.
+            
+            # Let's do it simpler: Reconstruct Price Path
+            price_path = np.exp(np.cumsum(window_returns))
+            # Normalize: Price at signal time (just before return[i]) should be 1.0
+            # return[i] is the change from Price[t] to Price[t+1].
+            # So Price[t] is the baseline.
+            # The cumulative sum includes return[i-back]...
+            # Let's say window_back=2. Indices: i-2, i-1, i, i+1, i+2.
+            # i-2: t-2 to t-1
+            # i-1: t-1 to t
+            # i  : t   to t+1 (Target)
+            
+            # We want Price[t] = 1.0.
+            # Price[t-1] = Price[t] / exp(ret[i-1])
+            # Price[t+1] = Price[t] * exp(ret[i])
+            
+            # Construct path relative to index `window_back` (which is 'i')
+            # 0: i-2
+            # 1: i-1
+            # 2: i (Target)
+            
+            # Base = 0.0
+            path = np.zeros(len(window_returns) + 1)
+            path[window_back] = 0.0 # t=0
+            
+            # Backward fill
+            current = 0.0
+            for k in range(window_back - 1, -1, -1):
+                current -= window_returns[k]
+                path[k] = current
+                
+            # Forward fill
+            current = 0.0
+            for k in range(window_back, len(window_returns)):
+                current += window_returns[k]
+                path[k+1] = current
+                
+            # Remove the last point if it exceeds our window logic or just keep it.
+            # path has length window_back + window_fwd + 1
+            
+            if self.config.MODEL_TYPE == 'regression':
+                if self.config.USE_ADAPTIVE_THRESHOLD:
+                    # Calculate rolling stats on the WHOLE predictions array first
+                    # We need to do this outside the loop for efficiency, but for now we can do it here or pass it in.
+                    # Actually, let's calculate thresholds for the specific index 'i'.
+                    # We need the window ending at 'i-1' (past data).
+                    
+                    # To be consistent with evaluate_test_set, we use a rolling window on the predictions series.
+                    # Let's calculate the thresholds for the entire series once.
+                    pass # Logic moved outside loop
+                else:
+                    if pred > 0:
+                        up_events.append(path)
+                    elif pred < 0:
+                        down_events.append(path)
+            else:
+                if pred > 0.5:
+                    up_events.append(path)
+                else:
+                    down_events.append(path)
+
+        # --- Adaptive Threshold Logic for Event Study ---
+        if self.config.MODEL_TYPE == 'regression' and self.config.USE_ADAPTIVE_THRESHOLD:
+            # Reset lists to use adaptive logic
+            up_events = []
+            down_events = []
+            
+            preds_series = pd.Series(predictions)
+            rolling_mean = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
+            rolling_std = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std().fillna(0)
+            
+            upper_bounds = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
+            lower_bounds = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
+            
+            for i in range(start_idx, end_idx):
+                pred = predictions[i]
+                
+                # Re-extract path (Code duplication, but cleaner than refactoring the whole function right now)
+                window_returns = returns[i - window_back : i + window_fwd]
+                path = np.zeros(len(window_returns) + 1)
+                path[window_back] = 0.0
+                
+                current = 0.0
+                for k in range(window_back - 1, -1, -1):
+                    current -= window_returns[k]
+                    path[k] = current
+                current = 0.0
+                for k in range(window_back, len(window_returns)):
+                    current += window_returns[k]
+                    path[k+1] = current
+                
+                # Adaptive Classification (Exact Strategy Logic)
+                # Strategy: Buy if Pred > Upper, Sell if Pred < Lower
+                # Note: The strategy also has a "Hold" state (between bounds).
+                # We only plot the "Active" signals here.
+                
+                if pred > upper_bounds[i]:
+                    up_events.append(path)
+                elif pred < lower_bounds[i]:
+                    down_events.append(path)
+                    
+        # Convert to arrays
+        up_events = np.array(up_events)
+        down_events = np.array(down_events)
+        
+        logger.info(f"Up Events: {len(up_events)}, Down Events: {len(down_events)}")
+        
+        # Plotting
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        x_axis = np.arange(-window_back, window_fwd + 1)
+        
+        # Plot Up Events
+        if len(up_events) > 0:
+            mean_up = np.mean(up_events, axis=0) * 100 # %
+            std_up = np.std(up_events, axis=0) * 100
+            sem_up = std_up / np.sqrt(len(up_events)) # Standard Error
+            
+            ax.plot(x_axis, mean_up, color=self.palette[2], linewidth=3, label=f'Avg Path when Model Predicts UP (N={len(up_events)})')
+            ax.fill_between(x_axis, mean_up - sem_up, mean_up + sem_up, color=self.palette[2], alpha=0.2)
+            
+        # Plot Down Events
+        if len(down_events) > 0:
+            mean_down = np.mean(down_events, axis=0) * 100 # %
+            std_down = np.std(down_events, axis=0) * 100
+            sem_down = std_down / np.sqrt(len(down_events))
+            
+            ax.plot(x_axis, mean_down, color=self.palette[3], linewidth=3, label=f'Avg Path when Model Predicts DOWN (N={len(down_events)})')
+            ax.fill_between(x_axis, mean_down - sem_down, mean_down + sem_down, color=self.palette[3], alpha=0.2)
+            
+        ax.axhline(0, color='black', linestyle='--', alpha=0.5)
+        ax.axvline(0, color='gray', linestyle=':', alpha=0.8, label='Prediction Time')
+        
+        ax.set_title(f'Event Study: Actual Market Move vs Prediction Direction\n(Mean Cumulative Return +/- Standard Error)')
+        ax.set_xlabel('Days Relative to Prediction (0 = Signal Generated)')
+        ax.set_ylabel('Cumulative Return (%)')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
+        visualization.save_plot(self.config.OUTPUT_DIR, f'event_study_{suffix}.png')
+        plt.close()
+        
+        # Statistical Test (T-test on t+1 return)
+        if len(up_events) > 0 and len(down_events) > 0:
+            # t+1 return is at index window_back + 1 in the path array
+            # path[window_back] is 0. path[window_back+1] is the return of the target day.
+            idx_target = window_back + 1
+            
+            ret_up = up_events[:, idx_target]
+            ret_down = down_events[:, idx_target]
+            
+            from scipy import stats
+            t_stat, p_val = stats.ttest_ind(ret_up, ret_down, equal_var=False)
+            
+            logger.info(f"Statistical Significance (t+1 Return):")
+            logger.info(f"Avg Return (UP Signal): {np.mean(ret_up)*100:.4f}%")
+            logger.info(f"Avg Return (DOWN Signal): {np.mean(ret_down)*100:.4f}%")
+            logger.info(f"Difference: {(np.mean(ret_up) - np.mean(ret_down))*100:.4f}%")
+            logger.info(f"T-Statistic: {t_stat:.4f}")
+            logger.info(f"P-Value: {p_val:.6f} {'(Significant)' if p_val < 0.05 else '(Not Significant)'}")

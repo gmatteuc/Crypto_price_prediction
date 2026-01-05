@@ -63,6 +63,12 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['MACD_Diff_Norm'] = macd.macd_diff() / df['Close']
     
     # --- 3. Volatility Indicators (Relative) ---
+    # Garman-Klass Volatility (More efficient estimator than Close-to-Close)
+    # GK = 0.5 * ln(High/Low)^2 - (2*ln(2)-1) * ln(Close/Open)^2
+    log_hl = np.log(df['High'] / df['Low'])
+    log_co = np.log(df['Close'] / df['Open'])
+    df['Garman_Klass_Vol'] = 0.5 * log_hl**2 - (2 * np.log(2) - 1) * log_co**2
+    
     # Bollinger Bands %B (Position within bands, 0=Low, 1=High)
     bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
     df['BB_PctB'] = bb.bollinger_pband()
@@ -94,6 +100,26 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # OBV itself is cumulative. We use OBV Slope or Change.
     obv = OnBalanceVolumeIndicator(close=df['Close'], volume=df['Volume']).on_balance_volume()
     df['OBV_Slope'] = obv.pct_change() # Change in OBV
+
+    # --- 5b. Fractal & Efficiency Indicators ---
+    # Kaufman Efficiency Ratio (KER)
+    # KER = |Change(N)| / Sum(|Change(1)| for N periods)
+    # Measures trend efficiency. 1 = Straight line, 0 = Random noise.
+    ker_window = 14
+    direction = df['Close'].diff(ker_window).abs()
+    volatility = df['Close'].diff().abs().rolling(window=ker_window).sum()
+    df['KER'] = direction / volatility
+
+    # Fractal Dimension (Simplified via Volatility)
+    # We can use the relationship between Range and Volatility to estimate Fractal Dimension
+    # But KER is a good proxy for "Trendiness" vs "Choppiness".
+    
+    # Rolling Hurst Exponent (Simplified Proxy)
+    # A true Hurst calculation is slow. We can use a proxy:
+    # H ~ log(Range) / log(Time)
+    # We'll use a standardized version of Range/StdDev (Rescaled Range Analysis)
+    # This is computationally expensive for rolling windows in pure pandas.
+    # We will stick to KER as our primary "Regime" filter.
 
     # --- 6. Macro Indicators (Transformed) ---
     # Absolute prices of SP500 and Rates are not as predictive as their changes
@@ -130,6 +156,18 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         # Daily return Oil
         df['Oil_Ret'] = df['Oil'].pct_change()
         
+    if 'COIN' in df.columns:
+        # Daily return Coinbase
+        df['COIN_Ret'] = df['COIN'].pct_change()
+        
+    if 'NVDA' in df.columns:
+        # Daily return NVIDIA
+        df['NVDA_Ret'] = df['NVDA'].pct_change()
+        
+    if 'EURUSD' in df.columns:
+        # Daily return EUR/USD
+        df['EURUSD_Ret'] = df['EURUSD'].pct_change()
+        
     if 'FNG' in df.columns:
         # Fear & Greed Index (0-100)
         # We can use it as is (0-100) or normalize it. 
@@ -143,6 +181,15 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['ETH_BTC_Ratio'] = df['Close'] / df['BTC']
         df['ETH_BTC_Ret'] = df['ETH_BTC_Ratio'].pct_change()
         
+    # --- 7. Cyclical Time Features ---
+    # Day of Week (0-6) -> Sine/Cosine
+    df['Day_Sin'] = np.sin(2 * np.pi * df.index.dayofweek / 7)
+    df['Day_Cos'] = np.cos(2 * np.pi * df.index.dayofweek / 7)
+    
+    # Month of Year (1-12) -> Sine/Cosine
+    df['Month_Sin'] = np.sin(2 * np.pi * df.index.month / 12)
+    df['Month_Cos'] = np.cos(2 * np.pi * df.index.month / 12)
+
     # --- Cleanup ---
     # Drop raw non-stationary columns to force model to use relative features
     # We keep 'Close' only for calculating targets later (if needed outside), 
@@ -230,7 +277,14 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
         'NASDAQ_Ret',           # Tech Sector Correlation
         'Oil_Ret',              # Commodity/Inflation Correlation
         'FNG',                  # Sentiment (Fear & Greed)
-        'ETH_BTC_Ret'           # Relative Strength vs BTC
+        'ETH_BTC_Ret'           # Relative Strength vs BTC        'KER',                  # Kaufman Efficiency Ratio (Trend Quality)        # 'COIN_Ret',             # Crypto Equity Correlation (Removed: Noise)
+        # 'NVDA_Ret',             # Tech/AI Correlation (Removed: Noise)
+        # 'EURUSD_Ret',           # Forex Correlation (Removed: Noise)
+        # 'Garman_Klass_Vol',     # Advanced Volatility (Removed: Redundant)
+        # 'TNX_Change',           # Interest Rate Change (Removed: Noise)
+        # 'VIX_Change',           # Volatility Index Change (Removed: Noise)
+        # 'Day_Sin', 'Day_Cos',   # Cyclical Time (Weekly) (Removed: Noise)
+        # 'Month_Sin', 'Month_Cos'# Cyclical Time (Yearly) (Removed: Noise)
     ]
     
     # Filter only columns that actually exist in the dataframe

@@ -172,6 +172,10 @@ def main():
     test_log_rets = test_log_rets[:min_len]
     
     evaluator.calculate_financial_metrics(test_log_rets, predictions)
+    
+    # 5b. Event Study Analysis (New)
+    # Verify if "Up" predictions actually lead to "Up" moves on average
+    evaluator.perform_event_study(test_log_rets, predictions, window_back=3, window_fwd=5)
 
     # 6. Prediction for Tomorrow
     logger.info("\n--- Prediction for Tomorrow ---")

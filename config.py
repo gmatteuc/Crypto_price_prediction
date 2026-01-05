@@ -15,16 +15,16 @@ class Config:
     # Data Settings
     TICKER = "ETH-USD"
     START_DATE = "2018-02-01" # Changed to align with Fear & Greed Index availability
-    SEQ_LENGTH = 30       # Increased to 30 days to capture longer trends
+    SEQ_LENGTH = 14       # Reduced to 14 days (2 weeks) to capture recent momentum and reduce noise
     PREDICTION_HORIZON = 1 # Prediction horizon in days (1 = Daily, 7 = Weekly)
     TEST_SPLIT = 0.2
     
     # Model Settings
     MODEL_TYPE = 'regression' # 'classification' or 'regression'
     INPUT_SIZE = None # Will be determined dynamically
-    HIDDEN_SIZE = 128     # Increased capacity
+    HIDDEN_SIZE = 64      # Reduced capacity to prevent overfitting
     NUM_LAYERS = 2        # Two layers to capture more complex patterns
-    DROPOUT = 0.1         # Reduced dropout to allow more fitting
+    DROPOUT = 0.2         # Increased dropout for better regularization
     
     # Training Settings
     TRAIN_MODEL = True
@@ -33,16 +33,16 @@ class Config:
     LEARNING_RATE = 0.001 # Increased learning rate for GRU
     WEIGHT_DECAY = 1e-4   # Standard L2 Regularization
     PATIENCE = 20         # Increased patience
-    DIRECTIONAL_PENALTY_WEIGHT = 5.0 # Moderate penalty to encourage directional accuracy
+    DIRECTIONAL_PENALTY_WEIGHT = 1.0 # Reduced penalty to prevent model collapse to zero
     
     # Strategy Settings
     TRANSACTION_COST = 0.001  # 0.1% per trade (Realistic Exchange Fee)
-    CONFIDENCE_THRESHOLD = 0.65  # Increased for more conservative fixed threshold
+    CONFIDENCE_THRESHOLD = 0.60  # Decreased for more aggressive fixed threshold
     
     # Adaptive Strategy
     USE_ADAPTIVE_THRESHOLD = True
-    ADAPTIVE_WINDOW = 20
-    ADAPTIVE_STD = 1.5 # Increased from 1.0 to 1.5 to be more conservative (wider bands)
+    ADAPTIVE_WINDOW = 10 # Reduced to 10 days for faster reaction to trend changes
+    ADAPTIVE_STD = 1.0 # Decreased from 1.5 to 1.0 to be more aggressive
     
     # Paths
     MODEL_FILE = 'eth_lstm_classifier.pth'
