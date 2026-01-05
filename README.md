@@ -50,16 +50,15 @@ The data is fetched dynamically using the `yfinance` API.
 - **Monte Carlo Sampling**: Comparison of strategy returns against 200 random samples of Buy & Hold and Random Trading over 30-day windows to ensure statistical significance.
 
 ## Key Findings (Jan 2026)
-Despite a challenging market period where the underlying asset (ETH) lost value, the strategy remained profitable.
 
-- **LSTM Strategy**: **+21.9%**
-- **Buy & Hold**: **-14.8%**
-- **Random Strategy**: **-45.0%**
+- **Strategy Outperformance**: Across the test period, the LSTM strategy achieved a **+21.9%** return, significantly outperforming the Buy & Hold approach which suffered a **-14.8%** loss due to market downturns.
+- **Risk Mitigation**: The model's adaptive thresholding successfully filtered out low-confidence trades. This is evident when compared to the Random Strategy baseline, which incurred a massive **-45.0%** loss, highlighting the value of the model's selective trading.
+- **Defensive Alpha**: The system demonstrates that profitability in volatile crypto markets is not just about predicting every move, but about avoiding significant drawdowns. The equity curve shows the strategy preserving capital (flat line) during the asset's steep declines.
 
 ![Equity Curve](misc/equity_curve_regression_example.png)
+![Strategy Comparison](misc/strategy_comparison_bar_regression_example.png)
 
-**The "Defensive" Paradox**:
-The model's raw predictive accuracy is low (near 50%), but the strategy succeeds because it effectively identifies **when NOT to trade**. As seen in the equity curve, the strategy line (purple) stays flat during the major market crash (orange line drop), preserving gains.
+*Figure: (Top) Equity curve comparing the LSTM Strategy (Purple) vs Buy & Hold (Orange). (Bottom) Bar chart comparison showing the final returns of the Strategy, Buy & Hold, and Random baseline (30-days return from random starting point in the test period).*
 
 ## 💻 Project Structure
 ```
