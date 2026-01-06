@@ -1,120 +1,132 @@
-# Crypto Prediction with LSTM
+# Crypto Price Prediction Playground
 
-<img src="misc/dataset-cover.png" width="800">
+## Executive Summary & Key Findings
 
-## Project Overview
-This project implements a professional-grade **Quantitative Trading Strategy** for Ethereum (ETH), utilizing a **GRU (Gated Recurrent Unit) with Attention Mechanism**.
+This project aimed to build a predictive model for cryptocurrency markets (Ethereum) using advanced machine learning techniques (LSTM, Random Forest) and rigorous backtesting. 
 
-Unlike typical retail "price prediction" bots that attempt to forecast exact prices (often resulting in overfitting), this project focuses on **Regime Identification** and **Risk Management**. The core hypothesis is that while exact price prediction in crypto is nearly impossible due to high noise, identifying **periods of market weakness** (negative skew) is statistically feasible.
+**The Conclusion:** While Neural Networks are powerful, our extensive testing reveals that for this specific timeframe and feature set, **they offer no significant "Alpha" over simple Trend Following strategies.**
 
-As a Financial Data Science portfolio project, it showcases a complete "Quant Ops" workflow: from data ingestion and feature engineering to building a custom Deep Learning model and implementing a rigorous **Statistical Validation** framework.
+Instead of forcing a "black box" to work, this project serves as a **transparent, rigorous study** demonstrating that market complexity does not always require model complexity.
 
-The goal is to address two critical challenges in Algo-Trading:
-1.  **Can we extract a statistically significant signal from noisy financial data without overfitting?**
-2.  **Can we build a "Defensive Alpha" strategy that preserves capital during market crashes?**
+| Architecture | Strategy Return | Sharpe Ratio | Win Rate vs SMA* |
+| :--- | :--- | :--- | :--- |
+| **LSTM (Deep Learning)** | +47.8% | 1.10 | 30.6% |
+| **Simple SMA (Benchmark)** | **+76.2%** | **1.25** | - |
+| **Buy & Hold** | +4.0% | 0.08 | - |
 
-**Financial use case scenario:**
-*Imagine an automated trading system that needs to navigate a highly volatile crypto market. The goal is not to trade every single day, but to identify high-probability opportunities and, crucially, to sit in cash when the market direction is uncertain or bearish. This tool acts as a risk-managed portfolio allocator.*
+*> "Win Rate vs SMA" indicates how often the ML Model beat the Simple Moving Average in 1,000 bootstrap simulations.*
 
-Created by Giulio Matteucci in 2026 as a Financial Data Science portfolio project.
+*> Note: The results presented above were generated on **January 6, 2026**. Since the pipeline continually fetches the latest data from Yahoo Finance, future executions may yield different numerical results.*
 
-## Dataset
-The data is fetched dynamically using the `yfinance` API.
-- **Source**: Yahoo Finance.
-- **Asset**: Ethereum (ETH-USD).
-- **Period**: Daily data from 2018 to present.
-- **Features**:
-  - **Market Data**: OHLCV (Open, High, Low, Close, Volume).
-  - **Macro Indicators**: S&P 500 (`^GSPC`), 10-Year Treasury Yield (`^TNX`), VIX (`^VIX`), DXY (`DX-Y.NYB`).
-  - **Technical Factors**: Garman-Klass Volatility, RSI, MACD, Bollinger Bands.
+---
 
-## Methodology
+## Methodology & Rigor
 
-### 1. Data Engineering & Preprocessing
-- **Feature Engineering**: Calculation of advanced technical indicators and integration of macro-economic data to provide market context.
-- **Scaling**: Robust scaling to handle outliers common in crypto data.
-- **Sequence Generation**: Creation of rolling time-window sequences (14 days) for GRU input.
+The value of this project lies in the **integrity of the pipeline**, designed to prevent common pitfalls in financial ML:
 
-### 2. Model Architecture
-- **Core**: 2-layer **GRU (Gated Recurrent Unit)** to capture temporal dependencies with lower computational cost than LSTM.
-- **Attention Mechanism**: A custom Attention layer allows the model to weigh specific past days more heavily, improving interpretability and signal extraction.
-- **Loss Function**: **Directional Huber Loss**.
-  $$Loss = Huber(y, \hat{y}) + \lambda \cdot |y - \hat{y}| \cdot \mathbb{1}_{sign(y) \neq sign(\hat{y})}$$
-  This custom loss penalizes "wrong direction" errors more severely than magnitude errors, aligning the optimization objective with the trading objective.
+1.  **Strict Leakage Prevention**: 
+    *   StandardScaler fitted *only* on training data.
+    *   Lagged technical indicators to ensure no look-ahead.
+    *   Adaptive Thresholds calculated using only past information.
+2.  **Robust Evaluation**:
+    *   **Block Bootstrap Analysis**: Re-sampling data blocks to preserve volatility correlation while testing statistical significance.
+    *   **Transaction Costs**: All backtests include a realistic 0.1% fee per trade.
+    *   **Strategic Benchmarks**: Comparing not just to "Buy & Hold", but to a "Simple Moving Average" strategy to isolate the ML contribution.
 
-### 3. Signal Generation (Regime Filtering)
-Instead of acting on raw predictions, the strategy uses an **Adaptive Threshold** mechanism:
-- **Buy Signal**: Prediction > $RollingMean + \sigma$ (Strong Momentum)
-- **Sell Signal**: Prediction < $RollingMean - \sigma$ (Weak Momentum/Downside Risk)
-- **Hold/Neutral**: Prediction within bounds (Noise)
+---
 
-This filters out low-confidence predictions, trading only when the signal-to-noise ratio is favorable.
+## The "Deep Learning Trap"
 
-### 4. Statistical Validation (The "Why it works" section)
-To prove the model isn't just overfitting noise, we employ rigorous statistical tests:
-- **Event Study**: We analyze the average cumulative return of the asset $N$ days after a signal.
-    - *Result*: "Sell" signals are followed by negative average returns, confirming the model successfully identifies danger zones.
-- **Bootstrap Analysis**: We simulate 1,000 alternative realities (block bootstrapping) to compare the strategy's Sharpe Ratio against a random distribution.
-    - *Result*: The strategy outperforms the benchmark in >75% of bootstrap samples.
+We tested three increasing levels of model complexity:
 
-## Key Findings
-- **Asymmetric Performance**: The model excels at **Capital Preservation**. By moving to cash during "Down" predictions, it avoids the steep drawdowns characteristic of Crypto winters.
-- **Low Correlation to Price**: The model's raw predictions may look like a "flat line" (low variance), but this is a feature, not a bug. It represents a conservative estimate of the *drift*, and the **Adaptive Threshold** successfully extracts the actionable signal from this conservative baseline.
-- **Real-World Viability**: Even after accounting for transaction costs (0.1% per trade), the strategy demonstrates a positive expectancy and a superior risk-adjusted return (Sharpe Ratio) compared to a passive Buy & Hold approach.
+1.  **Linear Models**: Logistic Regression.
+2.  **Ensemble Models**: Random Forest.
+3.  **Deep Learning**: LSTM.
+
+### Findings
+All three models converged to similar behavior. They essentially learned to be **"Momentum Filters"**.
+*   The models learned that "if price went up recently, it might keep going up".
+*   This imitation of momentum is indistinguishable from a simple Moving Average.
+*   The "Adaptive Threshold" we implemented to filter weak signals acted exactly like a volatility filter on a Moving Average.
 
 <p align="center">
-  <img src="misc/equity_curve_regression_example.png" width="80%">
+  <img src="misc/equity_curve_classification_example.png" width="800" alt="Equity Curve Comparison">
+  <br>
+  <em>Figure 1: The ML Model (Dark Purple) tracks the SMA Benchmark (Light Purple) almost perfectly, but with more noise and lower total return due to over-trading.</em>
 </p>
+
+---
+## 🔍 Event Study: Searching for Latent Alpha
+
+Despite the fact that the **Validation Loss** curve showed signs of overfitting (flatlining or increasing while training loss decreased), the model predictions were extremely biased towards predicting UP rather than DOWN (despite attempts to balance), and the accuracy hovered very close to 50%, we investigated whether the model captured *any* true predictive signal.
+
+We conducted an **Event Study Analysis** to visualize the market's behavior around the model's signals:
+
 <p align="center">
-  <img src="misc/event_study_regression_example.png" width="80%">
+  <img src="misc/event_study_classification_example.png" width="800" alt="Event Study Analysis">
+  <br>
+  <em>Figure 2: Event Study Analysis verifying signal quality.</em>
 </p>
 
-*Figure: (Top) Equity curve showing the "Defensive" nature of the strategy (flat during crashes). (Bottom) Event Study showing the clear divergence in future returns following Buy vs. Sell signals.*
+*   **Study 1 (Market Response)**: When the model predicts "UP" (Purple line), the average price path *does* trend positively over the next 5 days. However, the wide confidence intervals (shaded areas) indicate high variance.
+*   **Study 2 (Anticipation)**: We checked if the model predicts consistently *before* large market moves. There is a slight increase in probability leading up to big jumps, suggesting some sensitivity to volatility clustering.
+*   **Conclusion**: There is a "faint" predictive signal, but it is likely detecting the onset of volatility trends rather than "predicting" price direction, confirming the Momentum Filter hypothesis.
 
-## 💻 Project Structure
+---
+## Statistical Validation
+
+We utilized a **Bootstrap Analysis** to verify if the model's performance was due to skill or luck.
+
+<p align="center">
+  <img src="misc/strategy_comparison_bar_classification_example.png" width="800" alt="Bootstrap Analysis">
+  <br>
+  <em>Figure 3: In rigorous 30-day sampling windows, the ML Strategy (Purple) performs identically to the Simple Momentum Strategy (Pink), while both massively outperform Buy & Hold (Orange) and Random Trading (Grey).</em>
+</p>
+
+**Interpretation:**
+*   The ML model is **robust**: It consistently beats random trading and Buy & Hold.
+*   The ML model is **redundant**: It fails to consistently beat the simpler SMA strategy. 
+
+## Project Structure
+
+This codebase provides a professional framework for anyone wishing to test their own signals:
+
 ```
-├── misc/                                   # Images and assets
-├── output/                                 # Generated plots and logs
-├── check_gpu.py                            # Utility to verify CUDA
-├── config.py                               # Hyperparameters and settings
-├── data_loader.py                          # Data fetching (yfinance)
-├── evaluator.py                            # Backtesting, Event Studies, Bootstrap
-├── main.py                                 # Main execution entry point
-├── predict.py                              # Daily inference script
-├── model.py                                # PyTorch GRU + Attention definition
-├── preprocessor.py                         # Feature engineering
-├── trainer.py                              # Training loop with DirectionalHuberLoss
-├── utils.py                                # Logging and seeding utilities
-├── requirements.txt                        # Python dependencies
-└── README.md                               # Project documentation
+├── misc/                       # Images and assets
+├── output/                     # Generated plots, models, and logs
+├── config.py                   # Centralized configuration for reproducible experiments
+├── data_loader.py              # Data fetching module
+├── evaluator.py                # Advanced plotting (Equity Curves, Event Studies, Bootstrap)
+├── main.py                     # Orchestrator for Training, Optimization, and Evaluation
+├── model.py                    # Implementations of LSTM, Linear, and RF wrappers
+├── predict.py                  # Inference script for daily prediction
+├── preprocessor.py             # Feature engineering pipeline
+├── strategy_optimizer.py       # Methods to find optimal trading thresholds
+├── trainer.py                  # Model training loop
+└── requirements.txt            # Project dependencies
 ```
 
-## ⚙️ Installation & Usage
+## How to Run
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd Crypto_prediction
-   ```
+1.  **Install Dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+2.  **Configure Experiment**:
+    Edit `config.py` to switch between models:
+    ```python
+    MODEL_ARCH = 'lstm'   # or 'rf', 'linear'
+    ```
+3.  **Run Pipeline**:
+    ```bash
+    python main.py
+    ```
 
-2. **Set up the environment**:
-   It is recommended to use Conda.
-   ```bash
-   conda create -n crypto_prediction python=3.10 -y
-   conda activate crypto_prediction
-   pip install -r requirements.txt
-   ```
+## Final Thoughts
 
-3. **Run the Pipeline**:
-   ```bash
-   python main.py
-   ```
+Predicting cryptocurrency price movements based solely on historical price and volume data is notoriously difficult. This project demonstrates that in efficient or trend-driven markets, simpler approaches often outperform complex ones.
 
-## Dependencies
-- **Python 3.10+**
-- **PyTorch** (with CUDA support)
-- **Pandas** & **NumPy**
-- **TA-Lib** (Technical Analysis Library)
-- **Matplotlib** & **Seaborn**
-- **yfinance**
+Our analysis revealed that a basic **Momentum strategy (SMA) outperformed sophisticated Machine Learning models** (Linear, Random Forest, LSTM) on this dataset. This finding underscores a critical lesson in quantitative analysis: **complexity does not automatically yield better predictive and financial results**.
+
+Most importantly, this project highlights the absolute necessity of **rigorous statistical validation** and strict **measures against data leakage**. Without safeguards like the Bootstrap analysis and separate scaling used here, it is dangerously easy to be misled by backtests that look promising but fail to generalize.
 

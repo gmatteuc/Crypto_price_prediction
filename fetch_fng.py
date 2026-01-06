@@ -40,6 +40,11 @@ def fetch_fng_data():
             print("Data covers range from 2015.")
         else:
             print(f"Data starts from {min_date}, which is after 2015-01-01.")
+        
+        # Save to CSV as promised by docstring
+        output_file = 'fng_index.csv'
+        df.to_csv(output_file, index=False)
+        print(f"\nData saved to {output_file}")
             
     except Exception as e:
         print(f"An error occurred: {e}")

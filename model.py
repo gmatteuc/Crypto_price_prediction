@@ -2,40 +2,32 @@
 Crypto Prediction - Model Architecture
 ======================================
 
-This module defines the Deep Learning architecture (LSTM) and custom loss functions
-(Directional Huber Loss) used for price direction prediction.
+This module defines the Deep Learning architecture (LSTM) used for price direction prediction.
 """
 
 import torch
 import torch.nn as nn
 import os
 import logging
+import numpy as np
 
 logger = logging.getLogger("CryptoPrediction")
 
 class CryptoLSTMClassifier(nn.Module):
     """
-    GRU-based classifier with Attention Mechanism for cryptocurrency price direction prediction.
+    Simple LSTM classifier for cryptocurrency price direction prediction.
     """
     def __init__(self, input_size: int, hidden_size: int = 128, num_layers: int = 3, dropout: float = 0.2):
         """
-        Initializes the GRU with Attention.
+        Initializes the Simple LSTM.
         """
         super(CryptoLSTMClassifier, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         
-        # GRU Layer
-        self.gru = nn.GRU(input_size, hidden_size, num_layers, 
+        # LSTM Layer
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
                             batch_first=True, dropout=dropout if num_layers > 1 else 0)
-        
-        # Attention Mechanism
-        # We want to learn a weight for each time step
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, 1)
-        )
         
         # Explicit Dropout Layer
         self.dropout = nn.Dropout(dropout)
@@ -45,28 +37,21 @@ class CryptoLSTMClassifier(nn.Module):
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass with Attention.
+        Forward pass Simple LSTM.
         """
-        # Initialize hidden state
+        # Initialize hidden and cell states
         h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
         
-        # Forward pass GRU
+        # Forward pass LSTM
         # out shape: (batch_size, seq_length, hidden_size)
-        out, _ = self.gru(x, h0)
+        out, _ = self.lstm(x, (h0, c0))
         
-        # --- Attention Mechanism ---
-        # Calculate attention scores
-        # attn_weights shape: (batch_size, seq_length, 1)
-        attn_weights = self.attention(out)
-        attn_weights = torch.softmax(attn_weights, dim=1)
-        
-        # Apply attention weights to GRU output
-        # context_vector shape: (batch_size, hidden_size)
-        # Sum over the sequence dimension weighted by attention
-        context_vector = torch.sum(attn_weights * out, dim=1)
+        # Use only the last time step feature
+        out = out[:, -1, :]
         
         # Apply Dropout
-        out = self.dropout(context_vector)
+        out = self.dropout(out)
         
         # Pass to linear layer
         out = self.fc(out)
@@ -126,26 +111,44 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-class CryptoLSTMRegressor(nn.Module):
+class CryptoLinearClassifier(nn.Module):
     """
-    LSTM-based regressor for cryptocurrency price return prediction.
+    Simple Linear Classifier (Logistic Regression equivalent via SGD).
     """
-    def __init__(self, input_size: int, hidden_size: int = 128, num_layers: int = 3, dropout: float = 0.2):
-        super(CryptoLSTMRegressor, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        
-        lstm_dropout = dropout if num_layers > 1 else 0
-        
-        self.gru = nn.GRU(input_size, hidden_size, num_layers, 
-                            batch_first=True, dropout=lstm_dropout)
-        
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_size, 1)
-        
+    def __init__(self, input_size: int, seq_length: int, **kwargs):
+        super(CryptoLinearClassifier, self).__init__()
+        self.fc = nn.Linear(input_size * seq_length, 1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        out, _ = self.gru(x, h0)
-        out = self.dropout(out[:, -1, :])
-        out = self.fc(out)
-        return out
+        # x: (Batch, Seq, Feat) -> Flatten -> (Batch, Seq*Feat)
+        x = x.reshape(x.size(0), -1)
+        return self.fc(x)
+
+class RandomForestWrapper:
+    """
+    Wraps a sklearn Random Forest to mimic a PyTorch model for the Evaluator.
+    """
+    def __init__(self, model, model_type):
+        self.model = model
+        self.model_type = model_type
+
+    def __call__(self, x):
+        # x is tensor (Batch, Seq, Feat)
+        x_np = x.cpu().numpy()
+        # Flatten: (Batch, Seq*Feat)
+        x_flat = x_np.reshape(x_np.shape[0], -1)
+        
+        # Return probs of class 1
+        out = self.model.predict_proba(x_flat)[:, 1]
+             
+        # Evaluator expects tensor output
+        return torch.tensor(out, dtype=torch.float32).to(x.device)
+    
+    def eval(self):
+        pass
+    
+    def train(self):
+        pass
+    
+    def to(self, device):
+        return self

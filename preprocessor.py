@@ -14,7 +14,7 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import MFIIndicator, OnBalanceVolumeIndicator
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 import logging
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from config import Config
 
 logger = logging.getLogger("CryptoPrediction")
@@ -224,7 +224,7 @@ def scale_data(df: pd.DataFrame) -> Tuple[np.ndarray, StandardScaler]:
     scaled_data = scaler.fit_transform(df)
     return scaled_data, scaler
 
-def create_sequences(features: np.ndarray, targets: np.ndarray, seq_length: int) -> Tuple[np.ndarray, np.ndarray]:
+def create_sequences(features: np.ndarray, targets: np.ndarray, seq_length: int, weights: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Creates time sequences for LSTM.
     
@@ -232,12 +232,15 @@ def create_sequences(features: np.ndarray, targets: np.ndarray, seq_length: int)
         features (np.ndarray): Scaled feature data.
         targets (np.ndarray): Target data.
         seq_length (int): Length of the sequence.
+        weights (np.ndarray, optional): Sample weights.
         
     Returns:
-        Tuple[np.ndarray, np.ndarray]: X (sequences) and y (targets).
+        Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]: X (sequences), y (targets), w (weights - if provided).
     """
     X = []
     y = []
+    w = [] if weights is not None else None
+    
     # We want to predict target at index i using features up to index i
     # (Since target[i] is already shifted to be return[i+1])
     # So X should be features[i-seq_length+1 : i+1]
@@ -246,8 +249,13 @@ def create_sequences(features: np.ndarray, targets: np.ndarray, seq_length: int)
     for i in range(seq_length - 1, len(features)):
         X.append(features[i - seq_length + 1 : i + 1])
         y.append(targets[i])
+        if weights is not None:
+            w.append(weights[i])
         
-    return np.array(X), np.array(y)
+    if weights is not None:
+        return np.array(X), np.array(y), np.array(w)
+    else:
+        return np.array(X), np.array(y)
 
 def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -306,13 +314,10 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     # Future Close price N days from now
     future_close = df['Close'].shift(-horizon)
     
-    if Config.MODEL_TYPE == 'regression':
-        # Target is the actual return: (Future Close - Current Close) / Current Close
-        # We use Log Return for better statistical properties: ln(Future / Current)
-        df_features['Target_Return'] = np.log(future_close / df['Close'])
-    else:
-        # Target is 1 if Future Close > Current Close
-        df_features['Target_Class'] = (future_close > df['Close']).astype(float)
+    # Target is 1 if Future Close > Current Close
+    df_features['Target_Class'] = (future_close > df['Close']).astype(float)
+    # Also store return magnitude for sample weighting
+    df_features['Target_Return_Mag'] = np.abs(np.log(future_close / df['Close']))
     
     # Drop NaNs created by indicators (rolling windows) and shifting
     df_features.dropna(inplace=True)

@@ -39,175 +39,96 @@ class Evaluator:
         with torch.no_grad():
             outputs = self.model(X_test)
             
-        if self.config.MODEL_TYPE == 'regression':
-            preds = outputs.cpu().numpy().flatten()
+        # Classification Logic
+        probs = torch.sigmoid(outputs).cpu().numpy().flatten()
+        
+        # Log Probability Statistics
+        logger.info(f"\n--- Prediction Probabilities Stats ---")
+        logger.info(f"Min: {probs.min():.4f}")
+        logger.info(f"Max: {probs.max():.4f}")
+        logger.info(f"Mean: {probs.mean():.4f}")
+        logger.info(f"Std: {probs.std():.4f}")
+        logger.info(f"--------------------------------------")
+        
+        self.probs = probs # Store for plotting
             
-            # Regression Metrics
-            mse = np.mean((preds - y_test) ** 2)
-            rmse = np.sqrt(mse)
-            mae = np.mean(np.abs(preds - y_test))
-            r2 = r2_score(y_test, preds)
+        # Apply Trading Logic
+        positions = []
+        current_pos = 0 # Start with Cash
+        
+        if self.config.USE_ADAPTIVE_THRESHOLD:
+            # Calculate Adaptive Thresholds
+            probs_series = pd.Series(probs)
+            # Shift(1) to ensure we use ONLY past data for current threshold (Strictly No Leakage)
+            rolling_mean = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean().shift(1)
+            rolling_std = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std().shift(1)
             
-            # Directional Accuracy
-            # Correct if sign(pred) == sign(actual)
-            # Note: y_test are returns, so sign matters
-            correct_direction = np.sum(np.sign(preds) == np.sign(y_test))
-            dir_acc = correct_direction / len(y_test)
+            # Handle initial NaNs (First sample has no history)
+            rolling_mean = rolling_mean.fillna(0.5) 
+            rolling_std = rolling_std.fillna(0.0)
             
-            logger.info(f"\n--- Regression Metrics ---")
-            logger.info(f"RMSE: {rmse:.6f}")
-            logger.info(f"MAE: {mae:.6f}")
-            logger.info(f"R2 Score: {r2:.4f}")
-            logger.info(f"Directional Accuracy: {dir_acc*100:.2f}%")
-            logger.info(f"--------------------------")
+            self.upper_bound = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
+            self.lower_bound = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
             
-            # Trading Logic for Regression
-            positions = []
-            current_pos = 0
+            logger.info(f"Using Adaptive Threshold (Window={self.config.ADAPTIVE_WINDOW}, Std={self.config.ADAPTIVE_STD}) with Shift(1) for robustness")
             
-            # We don't have probabilities for regression, so we skip probability plots
-            self.probs = preds # Hack to keep other methods working if they access self.probs
-            
-            if self.config.USE_ADAPTIVE_THRESHOLD:
-                # Calculate Adaptive Thresholds on Predicted Returns
-                preds_series = pd.Series(preds)
-                rolling_mean = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
-                rolling_std = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std()
+            for i, p in enumerate(probs):
+                ub = self.upper_bound.iloc[i]
+                lb = self.lower_bound.iloc[i]
                 
-                # Handle initial NaNs or 0 std
-                rolling_std = rolling_std.fillna(0)
+                if p > ub:
+                    current_pos = 1 # Buy
+                elif p < lb:
+                    current_pos = 0 # Sell
+                # else: maintain current_pos
+                positions.append(current_pos)
                 
-                self.upper_bound = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
-                self.lower_bound = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
-                
-                logger.info(f"Using Adaptive Threshold for Regression (Window={self.config.ADAPTIVE_WINDOW}, Std={self.config.ADAPTIVE_STD})")
-                
-                for i, p in enumerate(preds):
-                    ub = self.upper_bound.iloc[i]
-                    lb = self.lower_bound.iloc[i]
-                    
-                    if p > ub:
-                        current_pos = 1 # Buy (Predicted return significantly above recent average)
-                    elif p < lb:
-                        current_pos = 0 # Sell (Predicted return significantly below recent average)
-                    # else: maintain current_pos
-                    positions.append(current_pos)
-            else:
-                # Simple strategy: Long if pred > 0, else Cash
-                threshold = 0.0
-                self.upper_bound = np.full_like(preds, threshold)
-                self.lower_bound = np.full_like(preds, threshold) # Same for regression fixed
-                
-                logger.info(f"Using Fixed Threshold for Regression: > {threshold}")
-                
-                for p in preds:
-                    if p > threshold:
-                        current_pos = 1
-                    else:
-                        current_pos = 0
-                    positions.append(current_pos)
-                
-            predictions = np.array(positions)
-            
-            # Plot Actual vs Predicted
-            plt.figure(figsize=(12, 6))
-            plt.plot(y_test, label='Actual Returns', alpha=0.6)
-            plt.plot(preds, label='Predicted Returns', alpha=0.6)
-            plt.title(f'Actual vs Predicted Returns (R2: {r2:.4f})')
-            plt.legend()
-            visualization.save_plot(self.config.OUTPUT_DIR, 'regression_results_regression.png')
-            plt.close()
-            
-            return predictions
-            
         else:
-            # Classification Logic
-            probs = torch.sigmoid(outputs).cpu().numpy().flatten()
+            # Fixed Threshold Logic
+            threshold = self.config.CONFIDENCE_THRESHOLD
+            self.upper_bound = np.full_like(probs, threshold)
+            self.lower_bound = np.full_like(probs, 1 - threshold)
             
-            # Log Probability Statistics
-            logger.info(f"\n--- Prediction Probabilities Stats ---")
-            logger.info(f"Min: {probs.min():.4f}")
-            logger.info(f"Max: {probs.max():.4f}")
-            logger.info(f"Mean: {probs.mean():.4f}")
-            logger.info(f"Std: {probs.std():.4f}")
-            logger.info(f"--------------------------------------")
+            logger.info(f"Using Fixed Threshold: {threshold}")
             
-            self.probs = probs # Store for plotting
-                
-            # Apply Trading Logic
-            positions = []
-            current_pos = 0 # Start with Cash
+            for p in probs:
+                if p >= threshold:
+                    current_pos = 1 # Buy/Long
+                elif p <= (1 - threshold):
+                    current_pos = 0 # Sell/Cash
+                # else: maintain current_pos
+                positions.append(current_pos)
             
-            if self.config.USE_ADAPTIVE_THRESHOLD:
-                # Calculate Adaptive Thresholds
-                probs_series = pd.Series(probs)
-                rolling_mean = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
-                rolling_std = probs_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std()
-                
-                # Handle initial NaNs or 0 std
-                rolling_std = rolling_std.fillna(0)
-                
-                self.upper_bound = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
-                self.lower_bound = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
-                
-                logger.info(f"Using Adaptive Threshold (Window={self.config.ADAPTIVE_WINDOW}, Std={self.config.ADAPTIVE_STD})")
-                
-                for i, p in enumerate(probs):
-                    ub = self.upper_bound.iloc[i]
-                    lb = self.lower_bound.iloc[i]
-                    
-                    if p > ub:
-                        current_pos = 1 # Buy
-                    elif p < lb:
-                        current_pos = 0 # Sell
-                    # else: maintain current_pos
-                    positions.append(current_pos)
-                    
-            else:
-                # Fixed Threshold Logic
-                threshold = self.config.CONFIDENCE_THRESHOLD
-                self.upper_bound = np.full_like(probs, threshold)
-                self.lower_bound = np.full_like(probs, 1 - threshold)
-                
-                logger.info(f"Using Fixed Threshold: {threshold}")
-                
-                for p in probs:
-                    if p >= threshold:
-                        current_pos = 1 # Buy/Long
-                    elif p <= (1 - threshold):
-                        current_pos = 0 # Sell/Cash
-                    # else: maintain current_pos
-                    positions.append(current_pos)
-                
-            predictions = np.array(positions)
-            
-            # Standard Classification Metrics
-            precision, recall, thresholds = precision_recall_curve(y_test, probs)
-            fscore = (2 * precision * recall) / (precision + recall + 1e-8)
-            ix = np.argmax(fscore)
-            best_thresh = thresholds[ix]
-            
-            logger.info(f"Optimal F1 Threshold: {best_thresh:.4f}")
-            
-            preds_binary = (probs > best_thresh).astype(float)
-            acc = accuracy_score(y_test, preds_binary)
-            cm = confusion_matrix(y_test, preds_binary)
-            
-            logger.info(f"\n--- Classification Metrics (Optimal Threshold {best_thresh:.4f}) ---")
-            logger.info(f"Accuracy: {acc*100:.2f}%")
-            logger.info(f"\nConfusion Matrix:\n{cm}")
-            logger.info(f"\nClassification Report:\n{classification_report(y_test, preds_binary)}")
-            
-            # Naive Benchmark
-            majority_class = 1 if np.mean(y_test) > 0.5 else 0
-            naive_preds = np.full_like(y_test, majority_class)
-            naive_acc = accuracy_score(y_test, naive_preds)
-            logger.info(f"Naive Benchmark (Majority Class): {naive_acc*100:.2f}%")
-            
-            self.plot_confusion_matrix_roc(y_test, probs, cm, accuracy=acc)
-            self.plot_rolling_metrics(y_test, preds_binary)
-            
-            return predictions
+        predictions = np.array(positions)
+        
+        # Standard Classification Metrics
+        precision, recall, thresholds = precision_recall_curve(y_test, probs)
+        fscore = (2 * precision * recall) / (precision + recall + 1e-8)
+        ix = np.argmax(fscore)
+        best_thresh = thresholds[ix]
+        
+        logger.info(f"Optimal F1 Threshold: {best_thresh:.4f}")
+        self.best_thresh = best_thresh # Store for Event Study
+        
+        preds_binary = (probs > best_thresh).astype(float)
+        acc = accuracy_score(y_test, preds_binary)
+        cm = confusion_matrix(y_test, preds_binary)
+        
+        logger.info(f"\n--- Classification Metrics (Optimal Threshold {best_thresh:.4f}) ---")
+        logger.info(f"Accuracy: {acc*100:.2f}%")
+        logger.info(f"\nConfusion Matrix:\n{cm}")
+        logger.info(f"\nClassification Report:\n{classification_report(y_test, preds_binary)}")
+        
+        # Naive Benchmark
+        majority_class = 1 if np.mean(y_test) > 0.5 else 0
+        naive_preds = np.full_like(y_test, majority_class)
+        naive_acc = accuracy_score(y_test, naive_preds)
+        logger.info(f"Naive Benchmark (Majority Class): {naive_acc*100:.2f}%")
+        
+        self.plot_confusion_matrix_roc(y_test, probs, cm, accuracy=acc)
+        # self.plot_rolling_metrics(y_test, preds_binary)
+        
+        return predictions, probs
 
     def plot_rolling_metrics(self, y_true, preds, window=30):
         """
@@ -251,8 +172,7 @@ class Evaluator:
         plt.legend()
         plt.grid(True, alpha=0.3)
         
-        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
-        visualization.save_plot(self.config.OUTPUT_DIR, f'rolling_metrics_{suffix}.png')
+        visualization.save_plot(self.config.OUTPUT_DIR, 'rolling_metrics_classification.png')
         plt.close()
 
     def plot_confusion_matrix_roc(self, y_true, probs, cm, accuracy=None):
@@ -286,11 +206,10 @@ class Evaluator:
         plt.title('Receiver Operating Characteristic')
         plt.legend(loc="lower right")
         
-        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
-        visualization.save_plot(self.config.OUTPUT_DIR, f'confusion_matrix_roc_{suffix}.png')
+        visualization.save_plot(self.config.OUTPUT_DIR, 'confusion_matrix_roc_classification.png')
         plt.close()
 
-    def calculate_financial_metrics(self, test_log_rets, predictions):
+    def calculate_financial_metrics(self, test_log_rets, predictions, sma_returns=None):
         """
         Calculates and prints financial metrics (Sharpe, Drawdown, etc.) including transaction costs.
         """
@@ -325,18 +244,50 @@ class Evaluator:
         # Calculate Equity Curve
         equity_strat = np.zeros_like(strategy_net_rets)
         current_equity = initial_capital
+        current_equity_strat = initial_capital # Use separate variable for cumulative product
+
+        # Vectorized cumprod is safer for performance
+        # equity_strat = initial_capital * np.cumprod(1 + strategy_net_rets)
         
-        for r in strategy_net_rets:
-            current_equity *= (1 + r)
-            equity_strat = np.append(equity_strat[:-1], current_equity) # This is slow, but clear. 
-            # Better: equity_strat = initial_capital * np.cumprod(1 + strategy_net_rets)
-        
+        # Iterative approach (if we want to handle drawdown-based risk management or stop-loss in future)
+        # But for now, vectorized:
         equity_strat = initial_capital * np.cumprod(1 + strategy_net_rets)
 
+        # --- SMA Benchmark Strategy ---
+        equity_sma = None
+        sma_net_rets = None
+        if sma_returns is not None:
+            # SMA returns passed from main.py (calculated from Open/Close/SMA)
+            # Assuming they are already net returns or gross returns?
+            # main.py will calculate gross returns. We should apply costs here if main.py passed gross returns.
+            # But main.py likely passes raw returns of the SMA strategy.
+            # Let's assume sma_returns are GROSS returns (Position * Asset_Ret)
+            
+            # We need to calculate SMA Costs?
+            # To do that, we need SMA Positions.
+            # It's cleaner if main.py passes `sma_net_rets`.
+            # Let's assume sma_returns ARE `sma_net_rets` for simplicity, as calculating trades 
+            # requires positions which we might not want to pass around.
+            # OR we pass `sma_positions` and calculate costs here.
+            # Decision: Let's assume main.py passes `sma_net_rets` directly.
+            
+            sma_net_rets = sma_returns
+            equity_sma = initial_capital * np.cumprod(1 + sma_net_rets)
+            
+            # SMA Metrics
+            sma_mean = np.mean(sma_net_rets)
+            sma_std = np.std(sma_net_rets)
+            sma_sharpe = (sma_mean / sma_std) * np.sqrt(252) if sma_std > 0 else 0
+            sma_total_ret = (equity_sma[-1] / initial_capital) - 1
+
         # --- Random Strategy (Benchmark) ---
-        # Random Buy/Sell (50% probability)
+        # Match Model Exposure (Time in Market) to ensure fair comparison
+        model_exposure = np.mean(predictions)
+        logger.info(f"Model Exposure (Time in Market): {model_exposure*100:.1f}%")
+        
+        # Generate random preds with approximately same probability of being 1
         random_probs = np.random.rand(len(predictions))
-        random_preds = (random_probs > 0.5).astype(int)
+        random_preds = (random_probs < model_exposure).astype(int)
         
         # Random Strategy Returns
         random_gross_rets = random_preds * asset_simple_rets
@@ -348,6 +299,10 @@ class Evaluator:
         
         random_net_rets = random_gross_rets - random_costs
         equity_random = initial_capital * np.cumprod(1 + random_net_rets)
+        
+        # Note: Random Strategy equity curve is one realization, 
+        # but strategy comparison bar chart uses the passed random_net_rets which is this one realization.
+        # Ideally, bar chart should re-sample random strategy to be robust, but matching exposure here helps.
 
         # Metrics
         mean_ret = np.mean(strategy_net_rets)
@@ -379,19 +334,21 @@ class Evaluator:
         logger.info(f"Max Drawdown: {max_drawdown*100:.2f}%")
         logger.info(f"Win Rate (on Long days): {win_rate*100:.2f}%")
         logger.info(f"Final Portfolio Value: ${equity_strat[-1]:.2f} (vs ${equity_bh[-1]:.2f} Buy&Hold)")
+        if equity_sma is not None:
+             logger.info(f"SMA Benchmark Value: ${equity_sma[-1]:.2f} (Sharpe: {sma_sharpe:.2f})")
         
-        self.plot_equity_curve(equity_bh, equity_strat, equity_random, predictions)
+        self.plot_equity_curve(equity_bh, equity_strat, equity_random, predictions, equity_sma=equity_sma)
         
         # Plot Strategy Comparison Bar Chart (Random Sampling)
-        self.plot_strategy_comparison_bar(asset_simple_rets, strategy_net_rets, random_net_rets)
+        self.plot_strategy_comparison_bar(asset_simple_rets, strategy_net_rets, random_net_rets, sma_net_rets=sma_net_rets)
         
         # Perform Robust Bootstrap Analysis
         # Increased block_size to 60 to preserve longer-term market regimes (volatility clustering)
-        self.perform_bootstrap_analysis(strategy_net_rets, asset_simple_rets, block_size=60)
+        self.perform_bootstrap_analysis(strategy_net_rets, asset_simple_rets, block_size=60, sma_returns=sma_net_rets)
         
         return equity_bh, equity_strat
 
-    def perform_bootstrap_analysis(self, strategy_rets, benchmark_rets, num_samples=1000, block_size=60):
+    def perform_bootstrap_analysis(self, strategy_rets, benchmark_rets, num_samples=1000, block_size=60, sma_returns=None):
         """
         Performs a Block Bootstrap analysis to test the statistical significance of the strategy's performance.
         Generates synthetic equity curves by resampling blocks of returns.
@@ -399,105 +356,131 @@ class Evaluator:
         logger.info(f"\n--- Robust Bootstrap Analysis ({num_samples} samples, block_size={block_size}) ---")
         
         n = len(strategy_rets)
-        # Ensure we can form full blocks
         if n < block_size:
             logger.warning("Not enough data for block bootstrap.")
             return
 
         strat_sharpes = []
         bench_sharpes = []
+        sma_sharpes = [] if sma_returns is not None else None
+        
         strat_total_rets = []
         bench_total_rets = []
+        sma_total_rets = [] if sma_returns is not None else None
         
         np.random.seed(42)
-        
-        # Pre-calculate available block start indices
-        # We use circular block bootstrap or just simple overlapping blocks
-        # Simple overlapping blocks:
         possible_starts = np.arange(n - block_size + 1)
         
         for _ in range(num_samples):
-            # Generate a random sequence of blocks to fill length n
-            # We need ceil(n / block_size) blocks
             num_blocks_needed = int(np.ceil(n / block_size))
-            
             chosen_starts = np.random.choice(possible_starts, size=num_blocks_needed, replace=True)
             
-            # Construct the synthetic return series
-            synth_strat_rets = []
-            synth_bench_rets = []
+            synth_strat = []
+            synth_bench = []
+            synth_sma = [] if sma_returns is not None else None
             
             for start in chosen_starts:
                 end = start + block_size
-                synth_strat_rets.extend(strategy_rets[start:end])
-                synth_bench_rets.extend(benchmark_rets[start:end])
+                synth_strat.extend(strategy_rets[start:end])
+                synth_bench.extend(benchmark_rets[start:end])
+                if sma_returns is not None:
+                    synth_sma.extend(sma_returns[start:end])
             
-            # Trim to original length
-            synth_strat_rets = np.array(synth_strat_rets[:n])
-            synth_bench_rets = np.array(synth_bench_rets[:n])
+            # Trim
+            synth_strat = np.array(synth_strat[:n])
+            synth_bench = np.array(synth_bench[:n])
+            if sma_returns is not None:
+                synth_sma = np.array(synth_sma[:n])
             
-            # Calculate Metrics for this sample
-            # Sharpe
-            s_mean = np.mean(synth_strat_rets)
-            s_std = np.std(synth_strat_rets)
-            s_sharpe = (s_mean / s_std) * np.sqrt(252) if s_std > 0 else 0
-            strat_sharpes.append(s_sharpe)
+            # Metrics
+            # --- Strategy ---
+            s_mean, s_std = np.mean(synth_strat), np.std(synth_strat)
+            strat_sharpes.append((s_mean / s_std * np.sqrt(252)) if s_std > 0 else 0)
+            strat_total_rets.append(np.prod(1 + synth_strat) - 1)
             
-            b_mean = np.mean(synth_bench_rets)
-            b_std = np.std(synth_bench_rets)
-            b_sharpe = (b_mean / b_std) * np.sqrt(252) if b_std > 0 else 0
-            bench_sharpes.append(b_sharpe)
+            # --- Benchmark (B&H) ---
+            b_mean, b_std = np.mean(synth_bench), np.std(synth_bench)
+            bench_sharpes.append((b_mean / b_std * np.sqrt(252)) if b_std > 0 else 0)
+            bench_total_rets.append(np.prod(1 + synth_bench) - 1)
             
-            # Total Return
-            s_total = np.prod(1 + synth_strat_rets) - 1
-            strat_total_rets.append(s_total)
-            
-            b_total = np.prod(1 + synth_bench_rets) - 1
-            bench_total_rets.append(b_total)
-            
+            # --- SMA ---
+            if sma_returns is not None:
+                sma_mean, sma_std = np.mean(synth_sma), np.std(synth_sma)
+                sma_sharpes.append((sma_mean / sma_std * np.sqrt(252)) if sma_std > 0 else 0)
+                sma_total_rets.append(np.prod(1 + synth_sma) - 1)
+
         # Convert to arrays
         strat_sharpes = np.array(strat_sharpes)
         bench_sharpes = np.array(bench_sharpes)
         strat_total_rets = np.array(strat_total_rets)
         bench_total_rets = np.array(bench_total_rets)
         
-        # Calculate Statistics
+        # Stats vs B&H
         sharpe_diff = strat_sharpes - bench_sharpes
         win_rate = np.mean(sharpe_diff > 0)
+        median_return_diff = np.median(strat_total_rets - bench_total_rets) * 100
         
-        logger.info(f"Bootstrap Win Rate (Strategy Sharpe > Benchmark Sharpe): {win_rate*100:.2f}%")
-        logger.info(f"Mean Strategy Sharpe: {np.mean(strat_sharpes):.2f} (95% CI: {np.percentile(strat_sharpes, 2.5):.2f}, {np.percentile(strat_sharpes, 97.5):.2f})")
-        logger.info(f"Mean Benchmark Sharpe: {np.mean(bench_sharpes):.2f}")
+        logger.info(f"Bootstrap Win Rate (Strategy Sharpe > B&H Sharpe): {win_rate*100:.2f}%")
+        logger.info(f"Median Return Diff (Strategy - B&H): {median_return_diff:.2f}%")
         
-        # Plot Distributions
-        plt.figure(figsize=(12, 6))
+        # Stats vs SMA
+        if sma_returns is not None:
+            sma_sharpes = np.array(sma_sharpes)
+            sma_total_rets = np.array(sma_total_rets)
+            sharpe_diff_sma = strat_sharpes - sma_sharpes
+            win_rate_sma = np.mean(sharpe_diff_sma > 0)
+            median_return_diff_sma = np.median(strat_total_rets - sma_total_rets) * 100
+            
+            logger.info(f"Bootstrap Win Rate (Strategy Sharpe > SMA Sharpe): {win_rate_sma*100:.2f}%")
+            logger.info(f"Median Return Diff (Strategy - SMA): {median_return_diff_sma:.2f}%")
+
+        # Plotting
+        # If SMA present, use 2x2 grid. Else 1x2.
+        rows = 2 if sma_returns is not None else 1
+        plt.figure(figsize=(12, 6 * rows))
         
-        # Plot 1: Sharpe Ratio Distribution
-        plt.subplot(1, 2, 1)
+        # --- Row 1: Strategy vs B&H ---
+        plt.subplot(rows, 2, 1)
         sns.histplot(strat_sharpes, color=self.palette[0], label='Strategy', kde=True, alpha=0.5)
         sns.histplot(bench_sharpes, color=self.palette[1], label='Buy & Hold', kde=True, alpha=0.5)
         plt.axvline(np.mean(strat_sharpes), color=self.palette[0], linestyle='--')
-        plt.axvline(np.mean(bench_sharpes), color=self.palette[1], linestyle='--')
-        plt.title(f'Bootstrap Sharpe Ratio Distribution\n(Win Rate: {win_rate*100:.1f}%)')
-        plt.xlabel('Sharpe Ratio')
+        plt.title(f'Sharpe: Strategy vs B&H\n(Win Rate: {win_rate*100:.1f}%)')
         plt.legend()
         
-        # Plot 2: Total Return Distribution
-        plt.subplot(1, 2, 2)
-        sns.histplot(strat_total_rets * 100, color=self.palette[0], label='Strategy', kde=True, alpha=0.5)
-        sns.histplot(bench_total_rets * 100, color=self.palette[1], label='Buy & Hold', kde=True, alpha=0.5)
+        plt.subplot(rows, 2, 2)
+        sns.histplot(strat_total_rets*100, color=self.palette[0], label='Strategy', kde=True, alpha=0.5)
+        sns.histplot(bench_total_rets*100, color=self.palette[1], label='Buy & Hold', kde=True, alpha=0.5)
         plt.axvline(np.mean(strat_total_rets)*100, color=self.palette[0], linestyle='--')
-        plt.axvline(np.mean(bench_total_rets)*100, color=self.palette[1], linestyle='--')
-        plt.title('Bootstrap Total Return Distribution')
-        plt.xlabel('Total Return (%)')
+        plt.title(f'Return: Strategy vs B&H\n(Median Diff: {median_return_diff:+.1f}%)')
         plt.legend()
         
+        # --- Row 2: Strategy vs SMA ---
+        if sma_returns is not None:
+            plt.subplot(rows, 2, 3)
+            # Find common range
+            # common_range = (min(min(strat_sharpes), min(sma_sharpes)), max(max(strat_sharpes), max(sma_sharpes)))
+            sns.histplot(strat_sharpes, color=self.palette[0], label='LSTM Model', kde=True, alpha=0.5)
+            sns.histplot(sma_sharpes, color='#C4A4E0', label='SMA Strategy', kde=True, alpha=0.5)
+            plt.axvline(np.mean(strat_sharpes), color=self.palette[0], linestyle='--')
+            plt.axvline(np.mean(sma_sharpes), color='#C4A4E0', linestyle='--')
+            plt.title(f'Sharpe: LSTM vs SMA\n(Win Rate: {win_rate_sma*100:.1f}%)')
+            plt.xlabel('Sharpe Ratio')
+            plt.legend()
+
+            plt.subplot(rows, 2, 4)
+            sns.histplot(strat_total_rets*100, color=self.palette[0], label='LSTM Model', kde=True, alpha=0.5)
+            sns.histplot(sma_total_rets*100, color='#C4A4E0', label='SMA Strategy', kde=True, alpha=0.5)
+            plt.axvline(np.mean(strat_total_rets)*100, color=self.palette[0], linestyle='--')
+            plt.axvline(np.mean(sma_total_rets)*100, color='#C4A4E0', linestyle='--')
+            plt.title(f'Return: LSTM vs SMA\n(Median Diff: {median_return_diff_sma:+.1f}%)')
+            plt.xlabel('Total Return (%)')
+            plt.legend()
+
         plt.tight_layout()
-        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
-        visualization.save_plot(self.config.OUTPUT_DIR, f'bootstrap_analysis_{suffix}.png')
+        visualization.save_plot(self.config.OUTPUT_DIR, 'bootstrap_analysis_classification.png')
         plt.close()
 
-    def plot_strategy_comparison_bar(self, asset_rets, strategy_rets, random_rets, window_days=30, num_samples=200):
+    def plot_strategy_comparison_bar(self, asset_rets, strategy_rets, random_rets, sma_net_rets=None, window_days=30, num_samples=200):
         """
         Plots a bar chart comparing average returns over a fixed window (e.g., 1 month)
         by sampling random starting points from the test set.
@@ -511,6 +494,7 @@ class Evaluator:
         bh_samples = []
         strat_samples = []
         rand_samples = []
+        sma_samples = [] if sma_net_rets is not None else None
 
         # Set seed for reproducibility of the sampling
         np.random.seed(42)
@@ -530,20 +514,30 @@ class Evaluator:
             strat_ret = np.prod(1 + strategy_rets[start_idx:end_idx]) - 1
             strat_samples.append(strat_ret)
             
-            # Random Strategy (We can re-simulate random strategy here or use the one passed)
-            # Using the one passed is consistent with the equity curve
+            # Random Strategy
             rand_ret = np.prod(1 + random_rets[start_idx:end_idx]) - 1
             rand_samples.append(rand_ret)
+            
+            # SMA Strategy
+            if sma_samples is not None:
+                sma_ret = np.prod(1 + sma_net_rets[start_idx:end_idx]) - 1
+                sma_samples.append(sma_ret)
 
-        # Calculate Mean and Standard Error (SEM)
+        # Calculate Means and SEMs
         means = [np.mean(strat_samples), np.mean(bh_samples), np.mean(rand_samples)]
-        # SEM = Std / sqrt(N)
         sems = [np.std(strat_samples) / np.sqrt(num_samples), 
                 np.std(bh_samples) / np.sqrt(num_samples), 
                 np.std(rand_samples) / np.sqrt(num_samples)]
                 
-        labels = ['LSTM Strategy', 'Buy & Hold', 'Random Strategy']
+        model_name = self.config.MODEL_ARCH.upper()
+        labels = [f'{model_name} Strategy', 'Buy & Hold', 'Random Strategy']
         colors = [self.palette[0], self.palette[1], 'gray']
+        
+        if sma_samples is not None:
+            means.insert(1, np.mean(sma_samples))
+            sems.insert(1, np.std(sma_samples) / np.sqrt(num_samples))
+            labels.insert(1, 'SMA Strategy')
+            colors.insert(1, '#C4A4E0')
 
         # Plot
         plt.figure(figsize=(10, 6))
@@ -588,20 +582,23 @@ class Evaluator:
         
         plt.grid(axis='y', alpha=0.3)
         
-        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
-        visualization.save_plot(self.config.OUTPUT_DIR, f'strategy_comparison_bar_{suffix}.png')
+        visualization.save_plot(self.config.OUTPUT_DIR, 'strategy_comparison_bar_classification.png')
         plt.close()
 
-    def plot_equity_curve(self, equity_bh, equity_strat, equity_random, predictions):
+    def plot_equity_curve(self, equity_bh, equity_strat, equity_random, predictions, equity_sma=None):
         """
         Plots the equity curve and the adaptive thresholds.
         """
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
         
         # --- Plot 1: Equity Curve ---
-        ax1.plot(equity_bh, label='Buy & Hold (ETH)', color=self.palette[1], alpha=0.7)
-        ax1.plot(equity_strat, label='LSTM Strategy (Long/Cash)', color=self.palette[0], linewidth=2)
-        ax1.plot(equity_random, label='Random Strategy', color='gray', linestyle=':', alpha=0.6)
+        model_name = self.config.MODEL_ARCH.upper() if hasattr(self.config, 'MODEL_ARCH') else 'LSTM'
+        ax1.plot(equity_bh, label=f'Buy & Hold (ETH) ({(equity_bh[-1]/equity_bh[0]-1)*100:.1f}%)', color=self.palette[1], alpha=0.7)
+        ax1.plot(equity_strat, label=f'{model_name} Strategy (Long/Cash) ({(equity_strat[-1]/equity_strat[0]-1)*100:.1f}%)', color=self.palette[0], linewidth=2)
+        ax1.plot(equity_random, label=f'Random Strategy ({(equity_random[-1]/equity_random[0]-1)*100:.1f}%)', color='gray', linestyle=':', alpha=0.6)
+        
+        if equity_sma is not None:
+             ax1.plot(equity_sma, label=f'SMA Strategy ({(equity_sma[-1]/equity_sma[0]-1)*100:.1f}%)', color='#C4A4E0', linewidth=2, linestyle='-')
         
         # Add Buy/Sell signals on Equity Curve
         preds_padded = np.concatenate(([0], predictions))
@@ -626,36 +623,20 @@ class Evaluator:
         ax1.grid(True, alpha=0.3)
         
         # --- Plot 2: Probabilities & Thresholds ---
-        if self.config.MODEL_TYPE == 'regression':
-            ax2.plot(self.probs, label='Predicted Return', color='gray', alpha=0.6)
-            ax2.axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Zero Line')
-            
-            # Plot Thresholds for Regression
-            if isinstance(self.upper_bound, pd.Series):
-                ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
-                ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
-                ax2.fill_between(range(len(self.probs)), self.lower_bound, self.upper_bound, color='gray', alpha=0.1)
-            else:
-                # Fixed threshold (usually 0)
-                pass 
-
-            ax2.set_ylabel('Predicted Return')
-            ax2.set_title('Predicted Returns & Adaptive Thresholds')
+        ax2.plot(self.probs, label='Model Probability', color='gray', alpha=0.6)
+        ax2.axhline(y=0.5, color='black', linestyle='--', alpha=0.5, label='0.5 Threshold')
+        
+        # Plot Thresholds
+        if isinstance(self.upper_bound, pd.Series):
+            ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
+            ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
+            ax2.fill_between(range(len(self.probs)), self.lower_bound, self.upper_bound, color='gray', alpha=0.1)
         else:
-            ax2.plot(self.probs, label='Model Probability', color='gray', alpha=0.6)
-            ax2.axhline(y=0.5, color='black', linestyle='--', alpha=0.5, label='0.5 Threshold')
-            
-            # Plot Thresholds
-            if isinstance(self.upper_bound, pd.Series):
-                ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
-                ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
-                ax2.fill_between(range(len(self.probs)), self.lower_bound, self.upper_bound, color='gray', alpha=0.1)
-            else:
-                ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
-                ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
-            
-            ax2.set_ylabel('Probability')
-            ax2.set_title('Model Confidence & Adaptive Thresholds')
+            ax2.plot(self.upper_bound, label='Upper Bound', color=self.palette[2], linestyle='--', alpha=0.8)
+            ax2.plot(self.lower_bound, label='Lower Bound', color=self.palette[3], linestyle='--', alpha=0.8)
+        
+        ax2.set_ylabel('Probability')
+        ax2.set_title('Model Confidence & Adaptive Thresholds')
 
         # Add Buy/Sell markers on Probability Plot
         if len(buy_indices) > 0:
@@ -670,27 +651,24 @@ class Evaluator:
         y_margin = (p_max - p_min) * 0.5 # Add 50% margin for context
         if y_margin == 0: y_margin = 0.1
         
-        if self.config.MODEL_TYPE == 'regression':
-             ax2.set_ylim(p_min - y_margin, p_max + y_margin)
-        else:
-             ax2.set_ylim(max(0, p_min - y_margin), min(1, p_max + y_margin))
+        ax2.set_ylim(max(0, p_min - y_margin), min(1, p_max + y_margin))
         
         ax2.legend(loc='upper left')
         ax2.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
-        visualization.save_plot(self.config.OUTPUT_DIR, f'equity_curve_{suffix}.png')
+        visualization.save_plot(self.config.OUTPUT_DIR, 'equity_curve_classification.png')
         plt.close()
 
-    def perform_event_study(self, returns: np.ndarray, predictions: np.ndarray, window_back: int = 3, window_fwd: int = 5):
+    def perform_event_study(self, returns: np.ndarray, predictions: np.ndarray, raw_predictions: np.ndarray = None, window_back: int = 3, window_fwd: int = 5):
         """
         Performs an Event Study Analysis to verify if model predictions lead to actual price moves.
         Plots the average cumulative return path for 'Up' predictions vs 'Down' predictions.
         
         Args:
             returns (np.ndarray): Actual log returns.
-            predictions (np.ndarray): Predicted returns (or probabilities).
+            predictions (np.ndarray): Predicted positions/signals.
+            raw_predictions (np.ndarray, optional): Raw predicted returns/probs.
             window_back (int): Days to look back before signal.
             window_fwd (int): Days to look forward after signal.
         """
@@ -789,66 +767,12 @@ class Evaluator:
             # Remove the last point if it exceeds our window logic or just keep it.
             # path has length window_back + window_fwd + 1
             
-            if self.config.MODEL_TYPE == 'regression':
-                if self.config.USE_ADAPTIVE_THRESHOLD:
-                    # Calculate rolling stats on the WHOLE predictions array first
-                    # We need to do this outside the loop for efficiency, but for now we can do it here or pass it in.
-                    # Actually, let's calculate thresholds for the specific index 'i'.
-                    # We need the window ending at 'i-1' (past data).
-                    
-                    # To be consistent with evaluate_test_set, we use a rolling window on the predictions series.
-                    # Let's calculate the thresholds for the entire series once.
-                    pass # Logic moved outside loop
-                else:
-                    if pred > 0:
-                        up_events.append(path)
-                    elif pred < 0:
-                        down_events.append(path)
+            if pred > 0.5:
+                up_events.append(path)
             else:
-                if pred > 0.5:
-                    up_events.append(path)
-                else:
-                    down_events.append(path)
+                down_events.append(path)
 
-        # --- Adaptive Threshold Logic for Event Study ---
-        if self.config.MODEL_TYPE == 'regression' and self.config.USE_ADAPTIVE_THRESHOLD:
-            # Reset lists to use adaptive logic
-            up_events = []
-            down_events = []
-            
-            preds_series = pd.Series(predictions)
-            rolling_mean = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
-            rolling_std = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std().fillna(0)
-            
-            upper_bounds = rolling_mean + (self.config.ADAPTIVE_STD * rolling_std)
-            lower_bounds = rolling_mean - (self.config.ADAPTIVE_STD * rolling_std)
-            
-            for i in range(start_idx, end_idx):
-                pred = predictions[i]
-                
-                # Re-extract path (Code duplication, but cleaner than refactoring the whole function right now)
-                window_returns = returns[i - window_back : i + window_fwd]
-                path = np.zeros(len(window_returns) + 1)
-                path[window_back] = 0.0
-                
-                current = 0.0
-                for k in range(window_back - 1, -1, -1):
-                    current -= window_returns[k]
-                    path[k] = current
-                current = 0.0
-                for k in range(window_back, len(window_returns)):
-                    current += window_returns[k]
-                    path[k+1] = current
-                
-                # Adaptive Classification (Exact Strategy Logic)
-                # Strategy: Buy if Pred > Upper, Sell if Pred < Lower
-                # Note: The strategy also has a "Hold" state (between bounds).
-                # We only plot the "Active" signals here.
-                
-                if pred > upper_bounds[i]:
-                    up_events.append(path)
-                elif pred < lower_bounds[i]:
-                    down_events.append(path)
+
                     
         # Convert to arrays
         up_events = np.array(up_events)
@@ -856,19 +780,98 @@ class Evaluator:
         
         logger.info(f"Up Events: {len(up_events)}, Down Events: {len(down_events)}")
         
-        # Plotting
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # --- Reverse Event Study: Model Anticipation ---
+        # Analyze: When the Market moves Big, did the Model predict it?
+        pred_given_up = []
+        pred_given_down = []
+        std_ret = np.std(returns)
         
+        # Use raw predictions if available (for better scale), else use signals
+        study_preds = raw_predictions if raw_predictions is not None else predictions
+        
+        # Determine classification threshold
+        cls_thresh = getattr(self, 'best_thresh', 0.5)
+
+        for i in range(start_idx, end_idx):
+            act_ret = returns[i]
+            # Window check
+            if i - window_back < 0 or i + window_fwd >= len(study_preds):
+                continue
+                
+            # For this study, we store the PREDICTIONS path, not the returns path
+            pred_window = study_preds[i - window_back : i + window_fwd + 1]
+            if len(pred_window) != window_back + window_fwd + 1:
+                continue
+            
+            # For Classification: Use probabilities directly (converted to %)
+            # This allows us to calculate MEAN prediction (Prop of UP) which visualizes conviction.
+            if self.config.MODEL_TYPE == 'classification' and raw_predictions is not None:
+                # Do NOT binarize. Show average Probability of UP.
+                # Center around 50%? Or just show raw %. 
+                # Raw % is 0 to 100.
+                pred_window = pred_window * 100.0 
+
+            if act_ret > std_ret: # Real UP Move
+                 pred_given_up.append(pred_window)
+            elif act_ret < -std_ret: # Real DOWN Move
+                 pred_given_down.append(pred_window)
+
+        pred_given_up = np.array(pred_given_up)
+        pred_given_down = np.array(pred_given_down)
+        # --- Subplot 3: Signal Logic (Z-Score of Prediction) ---
+        # Analyze: How many Standard Deviations is the prediction away from the Rolling Mean?
+        # This is the actual "Signal" used by the Adaptive Strategy.
+        
+        signal_given_up = []
+        signal_given_down = []
+        
+        # Calculate full series signal first
+        if self.config.USE_ADAPTIVE_THRESHOLD:
+            preds_series = pd.Series(study_preds)
+            rolling_mean = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).mean()
+            rolling_std = preds_series.rolling(window=self.config.ADAPTIVE_WINDOW, min_periods=1).std().fillna(1e-6)
+            
+            # This is the "Conviction" index
+            # If > 1.0 -> Buy Signal. If < -1.0 -> Sell Signal.
+            z_scores = (preds_series - rolling_mean.shift(1)) / (rolling_std.shift(1) + 1e-9)
+            # Clip outliers to prevent visualization artifacts
+            z_scores = z_scores.fillna(0).clip(-5, 5).values
+        else:
+            # If no adaptive, signal is just Pred - 0.5 (scaled?) 
+            # Not really defined, but let's mock it
+            z_scores = (study_preds - 0.5) * 10 
+        
+        for i in range(start_idx, end_idx):
+            act_ret = returns[i]
+            if i - window_back < 0 or i + window_fwd >= len(z_scores):
+                continue
+            
+            sig_window = z_scores[i - window_back : i + window_fwd + 1]
+            if len(sig_window) != window_back + window_fwd + 1:
+                continue
+                
+            if act_ret > std_ret:
+                signal_given_up.append(sig_window)
+            elif act_ret < -std_ret:
+                signal_given_down.append(sig_window)
+        
+        signal_given_up = np.array(signal_given_up)
+        signal_given_down = np.array(signal_given_down)
+        
+        # Plotting (3 Subplots)
+        fig, axes = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
         x_axis = np.arange(-window_back, window_fwd + 1)
         
+        # --- Subplot 1: Market Response to Model (Forward) ---
+        ax1 = axes[0]
         # Plot Up Events
         if len(up_events) > 0:
             mean_up = np.mean(up_events, axis=0) * 100 # %
             std_up = np.std(up_events, axis=0) * 100
             sem_up = std_up / np.sqrt(len(up_events)) # Standard Error
             
-            ax.plot(x_axis, mean_up, color=self.palette[2], linewidth=3, label=f'Avg Path when Model Predicts UP (N={len(up_events)})')
-            ax.fill_between(x_axis, mean_up - sem_up, mean_up + sem_up, color=self.palette[2], alpha=0.2)
+            ax1.plot(x_axis, mean_up, color=self.palette[0], linewidth=3, label=f'Avg Market Path when Model Predicts UP (N={len(up_events)})')
+            ax1.fill_between(x_axis, mean_up - sem_up, mean_up + sem_up, color=self.palette[0], alpha=0.2)
             
         # Plot Down Events
         if len(down_events) > 0:
@@ -876,20 +879,87 @@ class Evaluator:
             std_down = np.std(down_events, axis=0) * 100
             sem_down = std_down / np.sqrt(len(down_events))
             
-            ax.plot(x_axis, mean_down, color=self.palette[3], linewidth=3, label=f'Avg Path when Model Predicts DOWN (N={len(down_events)})')
-            ax.fill_between(x_axis, mean_down - sem_down, mean_down + sem_down, color=self.palette[3], alpha=0.2)
+            ax1.plot(x_axis, mean_down, color=self.palette[3], linewidth=3, label=f'Avg Market Path when Model Predicts DOWN (N={len(down_events)})')
+            ax1.fill_between(x_axis, mean_down - sem_down, mean_down + sem_down, color=self.palette[3], alpha=0.2)
             
-        ax.axhline(0, color='black', linestyle='--', alpha=0.5)
-        ax.axvline(0, color='gray', linestyle=':', alpha=0.8, label='Prediction Time')
+        ax1.axhline(0, color='black', linestyle='--', alpha=0.5)
+        ax1.axvline(0, color='gray', linestyle=':', alpha=0.8, label='Signal Time')
+        ax1.set_title(f'Study 1: Market Response to Signals\n(Price Path relative to Signal Day t=0)')
+        ax1.set_ylabel('Price Change vs Signal Day (%)')
+        ax1.legend(fontsize='small', loc='upper left', framealpha=0.9)
+        ax1.grid(True, alpha=0.3)
         
-        ax.set_title(f'Event Study: Actual Market Move vs Prediction Direction\n(Mean Cumulative Return +/- Standard Error)')
-        ax.set_xlabel('Days Relative to Prediction (0 = Signal Generated)')
-        ax.set_ylabel('Cumulative Return (%)')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        # --- Subplot 2: Model Anticipation of Market (Reverse) ---
+        ax2 = axes[1]
         
-        suffix = "regression" if self.config.MODEL_TYPE == 'regression' else "classification"
-        visualization.save_plot(self.config.OUTPUT_DIR, f'event_study_{suffix}.png')
+        # Plot Preds for Real UP
+        if len(pred_given_up) > 0:
+            # If classification, pred_window is already %, so don't multiply by 100 again.
+            multiplier = 1.0 
+            
+            mean_p_up = np.mean(pred_given_up, axis=0) * multiplier
+            std_p_up = np.std(pred_given_up, axis=0) * multiplier
+            sem_p_up = std_p_up / np.sqrt(len(pred_given_up))
+            
+            ax2.plot(x_axis, mean_p_up, color=self.palette[0], linewidth=3, linestyle='-', label=f'Avg Prediction when Market Actually Jumps UP (N={len(pred_given_up)})')
+            ax2.fill_between(x_axis, mean_p_up - sem_p_up, mean_p_up + sem_p_up, color=self.palette[0], alpha=0.1)
+
+        # Plot Preds for Real DOWN
+        if len(pred_given_down) > 0:
+            multiplier = 1.0
+            
+            mean_p_down = np.mean(pred_given_down, axis=0) * multiplier
+            std_p_down = np.std(pred_given_down, axis=0) * multiplier
+            sem_p_down = std_p_down / np.sqrt(len(pred_given_down))
+            
+            ax2.plot(x_axis, mean_p_down, color=self.palette[1], linewidth=3, linestyle='-', label=f'Avg Prediction when Market Actually Crashes (N={len(pred_given_down)})')
+            ax2.fill_between(x_axis, mean_p_down - sem_p_down, mean_p_down + sem_p_down, color=self.palette[1], alpha=0.1)
+
+        ax2.set_ylabel('Avg Pred Probability of UP (%)')
+        ax2.axhline(50, color='gray', linestyle='--', alpha=0.8, label='Neutral (50%)')
+
+        ax2.axvline(0, color='gray', linestyle=':', alpha=0.8)
+        ax2.set_title(f'Study 2: Model Anticipation of Significant Moves\n(Does the model predict consistently BEFORE the event?)')
+        ax2.set_xlabel('Days Relative to Event (0 = Day of Big Move)')
+        ax2.legend(fontsize='small', loc='lower left', framealpha=0.9)
+        ax2.grid(True, alpha=0.3)
+        
+        # --- Subplot 3: Adaptive Signal Z-Score ---
+        ax3 = axes[2]
+        
+        if len(signal_given_up) > 0:
+            mean_s_up = np.mean(signal_given_up, axis=0)
+            std_s_up = np.std(signal_given_up, axis=0)
+            sem_s_up = std_s_up / np.sqrt(len(signal_given_up))
+            
+            # Use Palette[0] (Deep Purple) to match Subplot 2 "Real UP"
+            ax3.plot(x_axis, mean_s_up, color=self.palette[0], linewidth=3, linestyle='-', label='Avg Signal Z-Score (Real UP)')
+            ax3.fill_between(x_axis, mean_s_up - sem_s_up, mean_s_up + sem_s_up, color=self.palette[0], alpha=0.2)
+            
+        if len(signal_given_down) > 0:
+            mean_s_down = np.mean(signal_given_down, axis=0)
+            std_s_down = np.std(signal_given_down, axis=0)
+            sem_s_down = std_s_down / np.sqrt(len(signal_given_down))
+            
+            # Use Palette[1] (Dark Orange) to match Subplot 2 "Real DOWN"
+            ax3.plot(x_axis, mean_s_down, color=self.palette[1], linewidth=3, linestyle='-', label='Avg Signal Z-Score (Real DOWN)')
+            ax3.fill_between(x_axis, mean_s_down - sem_s_down, mean_s_down + sem_s_down, color=self.palette[1], alpha=0.2)
+            
+        ax3.axhline(self.config.ADAPTIVE_STD, color='green', linestyle='--', alpha=0.5, label='Buy Threshold')
+        ax3.axhline(-self.config.ADAPTIVE_STD, color='red', linestyle='--', alpha=0.5, label='Sell Threshold')
+        ax3.axhline(0, color='brown', linestyle='--', alpha=0.5, label='Neutral')
+        ax3.axvline(0, color='gray', linestyle=':', alpha=0.8)
+        
+        ax3.set_title(f'Study 3: Adaptive Signal Strength (Z-Score)\n(Normalized Distance from Rolling Mean)')
+        ax3.set_ylabel('Signal Strength (Std Devs)')
+        ax3.set_xlabel('Days Relative to Event (0 = Day of Big Move)')
+        # Fix scale to prevent artifacts from distorting the view
+        ax3.set_ylim(-3, 3) 
+        ax3.legend(fontsize='small', loc='upper right', framealpha=0.9)
+        ax3.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        visualization.save_plot(self.config.OUTPUT_DIR, f'event_study_classification.png')
         plt.close()
         
         # Statistical Test (T-test on t+1 return)
