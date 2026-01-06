@@ -60,7 +60,7 @@ All three models converged to similar behavior. They essentially learned to be *
 ---
 ## 🔍 Event Study: Searching for Latent Alpha
 
-Despite the fact that the **Validation Loss** curve showed signs of overfitting (flatlining or increasing while training loss decreased), the model predictions were extremely biased towards predicting UP rather than DOWN (despite attempts to balance), and the accuracy hovered very close to 50%, we investigated whether the model captured *any* true predictive signal.
+Despite the fact that the **Validation Loss** curve showed signs of overfitting (flatlining or increasing while training loss decreased), the model predictions were extremely biased towards predicting UP rather than DOWN (despite attempts to balance), and the accuracy hovered very close to 50% (apprent predictive failure), we investigated whether the model captured *any* true predictive signal.
 
 We conducted an **Event Study Analysis** to visualize the market's behavior around the model's signals:
 
@@ -70,7 +70,7 @@ We conducted an **Event Study Analysis** to visualize the market's behavior arou
   <em>Figure 2: Event Study Analysis verifying signal quality.</em>
 </p>
 
-*   **Study 1 (Market Response)**: When the model predicts "UP" (Purple line), the average price path *does* trend positively over the next 5 days. However, the wide confidence intervals (shaded areas) indicate high variance.
+*   **Study 1 (Market Response)**: When the model predicts "UP" (Purple line), the average price path *does* trend positively over the next 5 days. However, the wide standard deviation (shaded areas) indicate high variance.
 *   **Study 2 (Anticipation)**: We checked if the model predicts consistently *before* large market moves. There is a slight increase in probability leading up to big jumps, suggesting some sensitivity to volatility clustering.
 *   **Conclusion**: There is a "faint" predictive signal, but it is likely detecting the onset of volatility trends rather than "predicting" price direction, confirming the Momentum Filter hypothesis.
 
@@ -82,7 +82,7 @@ We utilized a **Bootstrap Analysis** to verify if the model's performance was du
 <p align="center">
   <img src="misc/strategy_comparison_bar_classification_example.png" width="800" alt="Bootstrap Analysis">
   <br>
-  <em>Figure 3: In rigorous 30-day sampling windows, the ML Strategy (Purple) performs identically to the Simple Momentum Strategy (Pink), while both massively outperform Buy & Hold (Orange) and Random Trading (Grey).</em>
+  <em>Figure 3: In rigorous random resampling 30-day sampling windows, the ML Strategy (Purple) performs identically to the Simple Momentum Strategy (Pink), while both massively outperform Buy & Hold (Orange) and Random Trading (Grey).</em>
 </p>
 
 **Interpretation:**
