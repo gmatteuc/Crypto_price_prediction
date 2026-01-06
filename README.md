@@ -1,6 +1,8 @@
 # Crypto Price Prediction Playground
 
-## Executive Summary & Key Findings
+<img src="misc/dataset-cover.png" width="800">
+
+## Project Overview
 
 This project aimed to build a predictive model for cryptocurrency markets (Ethereum) using advanced machine learning techniques (LSTM, Random Forest) and rigorous backtesting. 
 
@@ -129,4 +131,6 @@ Predicting cryptocurrency price movements based solely on historical price and v
 Our analysis revealed that a basic **Momentum strategy (SMA) outperformed sophisticated Machine Learning models** (Linear, Random Forest, LSTM) on this dataset. This finding underscores a critical lesson in quantitative analysis: **complexity does not automatically yield better predictive and financial results**.
 
 Most importantly, this project highlights the absolute necessity of **rigorous statistical validation** and strict **measures against data leakage**. Without safeguards like the Bootstrap analysis and separate scaling used here, it is dangerously easy to be misled by backtests that look promising but fail to generalize.
+
+From a predictive standpoint, the results reported here represent a **negative result**, demonstrating **market efficiency** in this context. While the system can still be engineered to financially outperform a passive Buy & Hold strategy (similar to the SMA benchmark), the core finding stands: price history alone did not yield a significant predictive power. However, in professional data science, **a rigorous, validated negative result is far more valuable than an unreliable positive one**.
 
